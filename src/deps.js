@@ -181,9 +181,10 @@ async function createVenv(base, mode, log) {
   await run(base.python, args, { log });
 }
 
-async function pipInstall(py, specs, { mirror, indexUrl, log }) {
+async function pipInstall(py, specs, { mirror, indexUrl, log, force = false }) {
   if (!specs.length) return;
   const args = ['-m', 'pip', 'install', '--disable-pip-version-check', '-q'];
+  if (force) args.push('--ignore-installed', '--no-deps');
   if (indexUrl) args.push('--index-url', indexUrl); else if (mirror) args.push('-i', mirror);
   args.push(...specs);
   log(`[deps] pip install ${specs.join(' ')}`);
@@ -344,6 +345,11 @@ export async function ensureReady({ env = process.env, log = () => {}, signal, f
     await pipInstall(VENV_PY, spec.torchPackages ?? [], { indexUrl: spec.torchIndex, log });
   }
   await pipInstall(VENV_PY, spec.pip ?? [], { mirror, log });
+  // 有些包会被 ComfyUI 的 site-packages "视为已满足"而跳过（onnxruntime 就这样）。
+  // 这些要强制装进插件 venv，否则删掉 ComfyUI 就没了。
+  if (spec.forceInstall?.length) {
+    await pipInstall(VENV_PY, spec.forceInstall, { mirror, log, force: true });
+  }
 
   await ensureModel(model, manifest, log, signal);
   await ensureAssets(manifest, log, signal);

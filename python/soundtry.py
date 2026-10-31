@@ -1582,6 +1582,27 @@ def main():
         argv = argv[:i] + [val] + argv[i + 2:]
 
     args = ap.parse_args(argv)
+
+    # 设备语义：设置页写 auto/gpu/cpu；这里统一成 cuda/cpu，并在降级时说清楚。
+    _dev = (os.environ.get("SOUNDTRY_DEVICE") or "auto").strip().lower()
+    if _dev in ("auto", "gpu", "cpu"):
+        _vram = nvidia_vram_gb()
+        if _dev == "cpu":
+            _eff = "cpu"
+        elif _dev == "gpu":
+            if _vram is None:
+                _eff = "cpu"
+                print("# （没检测到 NVIDIA 显卡，已改用 CPU）")
+            elif _vram < 4:
+                _eff = "cpu"
+                print(f"# ⚠ 显存 {_vram} GB，小于 4 GB，暂不支持 GPU 推理加速（已强制 CPU）")
+            else:
+                _eff = "cuda"
+        else:
+            _eff = "cuda" if (_vram is not None and _vram >= 4) else "cpu"
+        os.environ["SOUNDTRY_DEVICE"] = _eff
+        args.device = _eff
+
     if getattr(args, "separator", None):
         os.environ["SOUNDTRY_SEPARATOR"] = args.separator
     if getattr(args, "vad_mode", None) is None:

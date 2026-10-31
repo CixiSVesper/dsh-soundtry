@@ -34,10 +34,12 @@
                                  "pip":  [
                                              "faster-whisper\u003e=1.0",
                                              "demucs\u003e=4.0",
-                                             "torchcrepe\u003e=0.0.23",
-                                             "onnxruntime\u003e=1.16"
+                                             "torchcrepe\u003e=0.0.23"
                                          ],
-                                 "mirror":  "https://pypi.tuna.tsinghua.edu.cn/simple"
+                                 "mirror":  "https://pypi.tuna.tsinghua.edu.cn/simple",
+                                 "forceInstall":  [
+                                                      "onnxruntime\u003e=1.16"
+                                                  ]
                              },
                   "standalone":  {
                                      "desc":  "整套装进插件 venv，不依赖机器上任何现成环境（ComfyUI 删了也不影响）。磁盘增量约 7 GB，torch 轮子下载约 2.5 GB。",
@@ -54,12 +56,13 @@
                                                  "numpy\u003e=1.24",
                                                  "scipy\u003e=1.10",
                                                  "librosa\u003e=0.10",
-                                                 "soundfile\u003e=0.12",
-                                                 "onnxruntime\u003e=1.16",
-                                                 "onnxruntime\u003e=1.16"
+                                                 "soundfile\u003e=0.12"
                                              ],
                                      "mirror":  "https://pypi.tuna.tsinghua.edu.cn/simple",
-                                     "note":  "torch 走 PyTorch 官方 cu129 索引，其余走清华镜像。"
+                                     "note":  "torch 走 PyTorch 官方 cu129 索引，其余走清华镜像。",
+                                     "forceInstall":  [
+                                                          "onnxruntime\u003e=1.16"
+                                                      ]
                                  }
               },
     "borrowedFromBase":  {

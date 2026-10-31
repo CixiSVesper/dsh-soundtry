@@ -1,48 +1,55 @@
 {
-  "name": "dsh-soundtry",
-  "version": "1.0.2",
-  "description": "DSH 的本地听觉插件：转写/节奏/旋律/和弦/结构六件套。依赖显式声明在 deps.manifest.json，首次运行自动安装；有 ComfyUI 就借它的 torch，省 7 GB。",
-  "keywords": [
-    "dsh",
-    "dsh-plugin",
-    "deepseek-harness",
-    "audio",
-    "asr",
-    "whisper",
-    "medium",
-    "bpm",
-    "melody",
-    "chord",
-    "structure",
-    "demucs"
-  ],
-  "license": "MIT",
-  "type": "module",
-  "main": "./src/index.js",
-  "exports": {
-    ".": "./src/index.js",
-    "./deps": "./src/deps.js",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "src",
-    "python",
-    "docs",
-    "deps.manifest.json",
-    "cordis.patch.yml",
-    "dsh.plugin.json",
-    "README.md"
-  ],
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "setup": "node src/deps.js",
-    "doctor": "node -e \"import('./src/runner.js').then(m=>console.log(JSON.stringify(m.environmentReport(),null,2)))\""
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  }
+    "name":  "dsh-soundtry",
+    "version":  "1.0.2",
+    "description":  "DSH 的本地听觉插件：转写/节奏/旋律/和弦/结构，六件套全离线。人声分离默认走 UVR MDX-Net（onnxruntime，不需要 torch）；依赖在首次运行时自动装，模型只记 URL 不进仓库。",
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "deepseek-harness",
+                     "audio",
+                     "asr",
+                     "whisper",
+                     "medium",
+                     "bpm",
+                     "melody",
+                     "chord",
+                     "structure",
+                     "demucs"
+                 ],
+    "license":  "MIT",
+    "type":  "module",
+    "main":  "./src/index.js",
+    "exports":  {
+                    ".":  "./src/index.js",
+                    "./client":  "./src/client.js",
+                    "./deps":  "./src/deps.js",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "src",
+                  "python",
+                  "docs",
+                  "deps.manifest.json",
+                  "cordis.patch.yml",
+                  "dsh.plugin.json",
+                  "README.md"
+              ],
+    "engines":  {
+                    "node":  "\u003e=20"
+                },
+    "scripts":  {
+                    "setup":  "node src/deps.js",
+                    "doctor":  "node -e \"import(\u0027./src/runner.js\u0027).then(m=\u003econsole.log(JSON.stringify(m.environmentReport(),null,2)))\""
+                },
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+
+                                          ]
+                           }
+            }
 }

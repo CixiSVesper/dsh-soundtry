@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import {
   PLUGIN_ROOT, ensureReady, status, loadConfig,
 } from './deps.js';
+import { resolveDevice } from './settings.js';
 
 const SCRIPT = join(PLUGIN_ROOT, 'python', 'soundtry.py');
 const JSON_MARK = '@@JSON@@';
@@ -58,6 +59,8 @@ export async function runSoundtry(subcommand, opts = {}) {
     log: (line) => { try { onProgress?.(line); } catch { /* 日志失败不影响安装 */ } },
   });
 
+  // 设置页里的设备选择 → 实际的 cuda/cpu。显存不足时会带一条警告。
+  const dev = await resolveDevice(env);
   const cudaLib = cudaLibFor(ready.base);
   const childEnv = { ...env, PYTHONIOENCODING: 'utf-8', KMP_DUPLICATE_LIB_OK: 'TRUE' };
   if (cudaLib) {
@@ -68,7 +71,7 @@ export async function runSoundtry(subcommand, opts = {}) {
     if (extra) childEnv.PATH = `${extra};${childEnv.PATH}`;
   }
   if (cfg.ffmpeg) childEnv.DSH_FFMPEG_PATH = childEnv.DSH_FFMPEG_PATH || cfg.ffmpeg;
-  if (cfg.device) childEnv.SOUNDTRY_DEVICE = childEnv.SOUNDTRY_DEVICE || cfg.device;
+  childEnv.SOUNDTRY_DEVICE = dev.effective === 'gpu' ? 'cuda' : 'cpu';
   if (cfg.compute) childEnv.SOUNDTRY_COMPUTE = childEnv.SOUNDTRY_COMPUTE || cfg.compute;
   if (cfg.prompt) childEnv.SOUNDTRY_PROMPT = childEnv.SOUNDTRY_PROMPT || cfg.prompt;
   childEnv.SOUNDTRY_MODEL = childEnv.SOUNDTRY_MODEL || ready.model;
@@ -132,7 +135,11 @@ export async function runSoundtry(subcommand, opts = {}) {
         ));
         return;
       }
-      finish(resolvePromise, { report, json, stderr, mode: ready.mode, model: ready.model });
+      const head = dev.warning ? '⚠ ' + dev.warning + '\n' : '';
+      finish(resolvePromise, {
+        report: head + report, json, stderr,
+        mode: ready.mode, model: ready.model, device: dev.effective,
+      });
     });
   });
 }

@@ -2,6 +2,30 @@
 
 **DSH 的本地听觉插件 · 1.0.2**
 
+让 agent 听得见声音：**转写、节奏、旋律、和弦、结构**六件套，全部在本机跑，零 API 费用。
+
+- **人声分离默认走 UVR MDX-Net**（onnxruntime 推理，**不需要 torch**）——快嘴说唱上比 Demucs 还准
+- **依赖是声明的，不是猜的**：`deps.manifest.json` 列清每一样；首次运行时自己装、自己下模型
+- **权重不进仓库**：仓库只记 URL、字节数和 MD5，63.7 MB 的分离模型 + 1.46 GB 的 whisper medium 都在你机器上下
+- **不可信的地方会自己说**：BPM 有 `ambiguous`/`level`/`conflict` 三态，切点双阈值同时报，和弦明说"根音可信、品质不可信"
+- **设置就在插件里**：**插件 → 已安装 → dsh-soundtry** 详情页里有「声音分析」区块，可切 CPU/GPU、分离后端、模型；显存 < 4 GB 时自动锁 CPU 并给出提示
+
+## 设置项（在插件详情页里）
+
+打开 **插件 → 已安装 → dsh-soundtry**，详情页底部有「声音分析」：
+
+| 控件 | 可选 | 说明 |
+|---|---|---|
+| 推理设备 | 自动 / 只用 GPU / 只用 CPU | 自动 = 显存 ≥ 4 GB 用 GPU。**显存小于 4 GB 时 GPU 不可用**，会显示「显存 X GB，小于 4 GB，暂不支持 GPU 推理加速（已强制 CPU）」 |
+| 分离后端 | 自动 / MDX-Net ONNX / Demucs / HPSS | 自动的降级顺序：ONNX → Demucs → HPSS |
+| 转写模型 | medium / large-v3 | large-v3 需另下 1.5 GB |
+
+改动写入 `~/.dsh/soundtry.json`，**保存后下一次工具调用即生效，不用重启**。读-改-写，只动这三个键，手写的 `python` / `comfyui` 不会被抹掉。
+
+被降级时，工具输出顶部会多一行 `⚠ …`，agent 也能看到，不会误以为在 GPU 上跑。
+
+> 诊断用：`SOUNDTRY_FAKE_VRAM=3.2` 可以模拟小显存机器，验证降级与提示文案。
+
 ## 1.0.2：分离后端换成 MDX-Net（onnxruntime，无 torch）
 
 这一版把**人声分离**从 Demucs（torch）换成了 **UVR MDX-Net 的 ONNX 模型**，用 onnxruntime 推理。
@@ -57,7 +81,7 @@ torch 从此在整条主路径上都不再需要。
 
 | 修复 | 做法 | 效果 |
 |---|---|---|
-| **分离进程隔离** | Demucs 改到子进程跑，只写 flac；主进程读回来再喂 whisper | 转写进程里**根本没有 torch**，torch 与 ct2 不可能抢 CUDA |
+| **分离进程隔离** | Demucs 改到子进程跑，只写 flac；主进程读回来再喂 whisper | 转写进程不再初始化 CUDA（实测 `torch.cuda.is_initialized() = False`，显存占用 0） |
 | **集中调用不碰 torch** | `sound_read`（= `all`）里强制旋律跟踪走 `pyin`，不 import torchcrepe | 一次调用里不再同时出现 torch 和 ct2 |
 | **安全退出** | 结果打印并 flush 后 `os._exit(0)`，跳过解释器清理 | 即使环境有隐患，也绕开崩溃发生的那段收尾 |
 
@@ -120,20 +144,26 @@ node src/deps.js
 
 ---
 
-## ⚠️ 省空间的关键：让 DSH 用 ComfyUI 当依赖源
+## ⚠️ 省空间：让 DSH 借用一个已有的 Python（可选）
 
-> **如果你机器上装了 ComfyUI（或任何带 torch 的 Python），让 agent 指过去就行——能省下约 7 GB。**
+> **1.0.2 起，默认路径（MDX 分离 + whisper）不需要 torch。** 但 whisper 的 ctranslate2 与
+> numpy/librosa/scipy 仍然要一个 Python 环境；机器上装了 ComfyUI（或任何带 torch 的 Python）时，
+> 让 agent 指过去最省——插件 venv 只装 4 个包，约 110 MB；否则走 standalone，约 7 GB。
 
 插件**默认会自动去找**（`D:\ComfyUI\*\python\python.exe` 这类常见路径），找到就用 `borrow` 模式：
 
 | 模式 | 装什么 | 磁盘增量 | 适用 |
 |---|---|---|---|
-| **borrow**（默认，推荐） | 只装 `faster-whisper` / `demucs` / `torchcrepe`；`torch`、`torchaudio`、`numpy`、`librosa`、`scipy` 全部沿用那个 Python 的 | **约 110 MB** + 模型 1457 MB | 有 ComfyUI / 有带 torch 的 Python |
+| **borrow**（默认） | 只装 `faster-whisper` / `demucs` / `torchcrepe` + 强制装 `onnxruntime`；`torch`、`torchaudio`、`numpy`、`librosa`、`scipy` 沿用那个 Python 的 | **约 160 MB** + 模型 1457 MB + 分离权重 64 MB | 有 ComfyUI / 有带 torch 的 Python |
 | **standalone**（兜底） | 全套都装进插件 venv，包括 torch（CUDA 轮子约 2.5 GB 下载） | 约 7 GB | 机器上没有任何带 torch 的 Python |
+
+> `onnxruntime` 是**强制装进插件 venv** 的（`forceInstall` + `--ignore-installed`）：
+> 否则 pip 会认为借用环境里已有而跳过，删掉那个环境后分离就废了。
 
 **给 agent 的原话可以这么说：**
 
 > "把 dsh-soundtry 的依赖源指到我 ComfyUI 的 python 上（`{"python": "D:\\ComfyUI\\...\\python\\python.exe"}` 写到 `~/.dsh/soundtry.json`），用 borrow 模式，别让它自己下 torch。"
+
 
 手工指定也可以，三种写法优先级从高到低：
 
@@ -180,7 +210,7 @@ sound_chords    input="D:/歌.flac"
 
 whisper 在没人声的地方会**主动编**：演职员表、"点赞订阅"、字幕组——这些句子长度和语速都完全正常，靠长度/语速判据抓不住。这里的做法是**从源头堵**：
 
-1. Demucs 拆出人声轨；
+1. **分离出人声轨**（默认 MDX-Net ONNX；也可 demucs / hpss）；
 2. 在人声轨上按能量找人声区间（阈值取 P90 的 25%，抗得住主歌小声/副歌大声）；
 3. 把邻近区间**合并成 30 秒量级的块**（切太碎会让 whisper 失去上下文，"暧昧告诉我不能这样"会变成"美国是我本人最爱"）；
 4. 只把这些块送进 whisper —— 前奏、间奏、尾奏根本不参与识别，**没有机会编**；
@@ -255,4 +285,11 @@ runtime\venv\Scripts\python.exe python\soundtry.py doctor
 
 ## 许可
 
-MIT。模型遵循各自上游许可：faster-whisper 权重来自 [ModelScope](https://www.modelscope.cn/models/pengzhendong/faster-whisper-medium)（MIT/Whisper 原许可），Demucs 权重来自 Meta（MIT）。
+MIT。**代码**是 MIT；**模型权重不在本仓库**，各自遵循上游许可，首次运行时由用户机器下载：
+
+| 权重 | 来源 | 体积 | 许可 |
+|---|---|---|---|
+| whisper medium（faster-whisper 格式） | [ModelScope](https://www.modelscope.cn/models/pengzhendong/faster-whisper-medium) | 1457 MB | Whisper 原许可（MIT） |
+| MDX-Net Kim_Vocal_2（ONNX） | [hf-mirror: audio-separator-models](https://hf-mirror.com/lainlives/audio-separator-models) | 63.7 MB | 随 UVR 生态分发，商用前请自行核对上游 |
+| Demucs htdemucs（可选后端） | Meta，首次分离时 torch.hub 下载 | 80 MB | MIT |
+
