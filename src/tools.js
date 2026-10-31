@@ -13,8 +13,10 @@ export const MELODY_TOOL = 'sound_melody';
 export const CHORDS_TOOL = 'sound_chords';
 export const STRUCTURE_TOOL = 'sound_structure';
 
-const SEPARATE_DESC = 'Run Demucs first to split vocals from the mix (default on). Turning it off is faster '
-  + 'but the melody then locks onto the bass and chords get polluted by the singer.';
+const SEPARATE_DESC = 'Split vocals from the mix before analysing (default ON — do not turn this off casually). '
+  + 'With it off, three things degrade at once: the melody locks onto the bass, chords get polluted by the singer, '
+  + 'AND whisper starts inventing lines over instrumental sections (measured case: a 10 s intro came out as '
+  + '"Zither Harp"). Only set false when separation itself is broken, or the input is already a dry vocal stem.';
 
 const INPUT_DESC = 'A media file: a video (mp4/mkv/…) or an audio file (wav/mp3/flac…). Absolute path, or '
   + 'relative to the working directory. bilibili DASH downloads split streams: pass the file that has audio, '

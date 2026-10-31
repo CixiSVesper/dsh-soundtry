@@ -168,6 +168,12 @@ def stems_for(path: str, use_gpu: bool = True, separator: str = None):
     outdir = _stems_dir(path)
     sep = (separator or os.environ.get("SOUNDTRY_SEPARATOR") or "auto").strip().lower()
 
+    # separator=none 表示"明确不分离"：连缓存都不该用，否则这个开关等于没写
+    # （缓存里有别的后端留下的轨时，它会静默生效，和用户意图相反）。
+    if sep == "none":
+        _stem_cache[key] = None
+        return None
+
     # 缓存命中：只读文件，此路径完全不 import torch
     got = _read_stems(outdir)
     if got:
@@ -761,6 +767,23 @@ def cmd_transcribe(args):
     if not chunks:
         chunks = [(vocals if vocals is not None else y, 0.0)]
 
+    # 门控被绕过时必须吼一声：三条路径（未分离 / separator=none / vad-mode=off）
+    # 都会让 whisper 直接看到器乐段，于是它开始编"Zither Harp""点赞订阅"这类东西。
+    # 实测同一首歌：默认起于 10.10s 且干净；--no-separate 会在 8.68s 编出 "Zither Harp"。
+    gate_on = bool(mode == "vocals" and vocals is not None and chunks
+                   and any(c[1] > 0 for c in chunks))
+    gate_reason = []
+    if not getattr(args, "separate", True):
+        gate_reason.append("separate=false")
+    if (os.environ.get("SOUNDTRY_SEPARATOR") or "auto").strip().lower() == "none":
+        gate_reason.append("separator=none")
+    if getattr(args, "vad_mode", "auto") == "off":
+        gate_reason.append("vad_mode=off")
+    if not gate_on:
+        reason = " / ".join(gate_reason) or "没有可用的人声轨"
+        print(f"# ⚠ 未启用人声门控（{reason}）：whisper 会看到器乐段，可能在无人处编词。"
+              f"要防幻觉请用默认的 separate=true + vad_mode=auto。")
+
     # 有真歌词时：自动生成 prompt（whisper 有它，唱词准确率天差地别），结尾再报覆盖率
     lyrics_text = None
     if getattr(args, "lyrics", None):
@@ -894,6 +917,8 @@ def cmd_transcribe(args):
         "segments": len(rows),
         "dropped_hallucinations": len(dropped),
         "source": src,
+        "gate": "on" if gate_on else "off",
+        "gate_reason": None if gate_on else (" / ".join(gate_reason) or "no-vocal-stem"),
         "coverage": round(min(1.0, covered / max(dur, .01)), 3),
         "cues": rows if args.include_cues else rows[:args.head],
         "srt": args.srt or None,
