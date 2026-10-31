@@ -1,7 +1,7 @@
 {
   "name": "dsh-soundtry",
-  "description": "Local audio understanding for DeepSeek Harness: transcription, rhythm (BPM/beats/cut alignment), melody. Borrows the machine's ComfyUI Python + CUDA instead of installing a second copy.",
-  "version": "0.1.0",
+  "description": "Local audio understanding for DeepSeek Harness: transcription (whisper medium), rhythm, melody, chords, structure. Dependencies are declared in deps.manifest.json and installed on first run; if a Python with torch exists (e.g. ComfyUI's), it is reused as the dependency source to save ~7 GB.",
+  "version": "1.0.0",
   "entry": {
     "name": "dsh-soundtry",
     "inject": [

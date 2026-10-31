@@ -1,131 +1,64 @@
 /**
- * runner.js — 找到"借来的" Python / CUDA，跑 python/soundtry.py，取回结果。
+ * runner.js — 1.0：先确保依赖就绪，再跑 python/soundtry.py。
  *
- * 两条原则：
- *   1. 不复制 ComfyUI 的任何东西。默认直接用它那个 python（通过本插件 venv 的
- *      pyvenv.cfg 反查出 home），CUDA 运行库则把它的 torch/lib 加进子进程 PATH。
- *   2. 找不到就说清楚缺哪一环、怎么改，而不是抛一个 spawn ENOENT。
+ * 和旧版最大的差别：不再"假设"venv 已经建好、torch 已经借到。每次调用都会经过
+ * deps.ensureReady()——它幂等地检查 runtime/ready.json 与模型文件，缺什么装什么，
+ * 装完再执行。所以第一次调用会慢（可能要下 1.4 GB 模型），之后就是秒级。
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import {
+  PLUGIN_ROOT, ensureReady, status, loadConfig,
+} from './deps.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const PLUGIN_ROOT = resolve(HERE, '..');
-const VENV_PY = join(PLUGIN_ROOT, 'runtime', 'venv', 'Scripts', 'python.exe');
 const SCRIPT = join(PLUGIN_ROOT, 'python', 'soundtry.py');
 const JSON_MARK = '@@JSON@@';
 
-function homeDir(env = process.env) {
-  return env.DSH_HOME?.trim() || join(homedir(), '.dsh');
+/** CUDA 运行库（cuDNN 9 / cuBLAS 12）在哪：基础解释器的 torch/lib。 */
+export function cudaLibFor(basePython) {
+  if (!basePython) return null;
+  const p = join(dirname(basePython), 'Lib', 'site-packages', 'torch', 'lib');
+  return existsSync(p) ? p : null;
 }
 
-/** ~/.dsh/soundtry.json —— 桌面端不继承 setx，所以文件才是可靠入口。 */
-export function loadConfig(env = process.env) {
-  const out = { python: '', comfyui: '', ffmpeg: '', device: '', compute: '', prompt: '', extraPath: [] };
-  try {
-    const raw = JSON.parse(readFileSync(join(homeDir(env), 'soundtry.json'), 'utf8'));
-    for (const k of Object.keys(out)) {
-      if (raw?.[k] !== undefined) out[k] = raw[k];
-    }
-  } catch { /* 没配置文件是常态 */ }
-  return out;
-}
-
-/** 从 venv 的 pyvenv.cfg 反查基础解释器所在目录（也就是 ComfyUI 的 python 目录）。 */
-function venvBase(venvPy) {
-  try {
-    const cfg = readFileSync(join(dirname(venvPy), '..', 'pyvenv.cfg'), 'utf8');
-    const m = /^home\s*=\s*(.+)$/m.exec(cfg);
-    return m ? m[1].trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-export function resolvePython(env = process.env, cfg = loadConfig(env)) {
-  const cands = [
-    env.SOUNDTRY_PYTHON,
-    cfg.python,
-    VENV_PY,
-  ].filter(Boolean);
-  for (const c of cands) {
-    if (existsSync(c)) return c;
-  }
-  const hint = [
-    '找不到可用的 Python。三种改法（优先级从高到低）：',
-    `  1. 设环境变量 SOUNDTRY_PYTHON=<python.exe 全路径>`,
-    `  2. 写 ${join(homeDir(env), 'soundtry.json')}：{"python": "C:\\\\...\\\\python.exe"}`,
-    `  3. 重建插件内的 venv：<ComfyUI>\\python\\python.exe -m venv --system-site-packages "${join(PLUGIN_ROOT, 'runtime', 'venv')}"`,
-  ].join('\n');
-  throw new Error(hint);
-}
-
-/** CUDA 运行库（cuDNN 9 / cuBLAS 12）在哪：优先配置，其次从 venv 反查 ComfyUI，最后看常见位置。 */
-export function resolveCudaLib(env = process.env, cfg = loadConfig(env)) {
-  const tried = [];
-  const push = (p) => {
-    if (!p) return null;
-    tried.push(p);
-    return existsSync(p) ? p : null;
-  };
-  let hit = push(env.SOUNDTRY_CUDA_LIB);
-  if (hit) return hit;
-  hit = push(cfg.comfyui ? join(cfg.comfyui, 'Lib', 'site-packages', 'torch', 'lib') : null);
-  if (hit) return hit;
-
-  const base = venvBase(resolvePython(env, cfg));
-  if (base) {
-    hit = push(join(base, 'Lib', 'site-packages', 'torch', 'lib'));
-    if (hit) return hit;
-  }
-  for (const guess of [
-    'D:/ComfyUI/ComfyUI-aki-v2/python/Lib/site-packages/torch/lib',
-    'C:/ComfyUI/ComfyUI-aki-v2/python/Lib/site-packages/torch/lib',
-  ]) {
-    hit = push(guess);
-    if (hit) return hit;
-  }
-  return null;
-}
-
+/** 启动时用：不触发安装，只报看到的状况。 */
 export function environmentReport(env = process.env) {
+  const st = status({ env });
   const cfg = loadConfig(env);
-  let python = null;
-  let error = null;
-  try {
-    python = resolvePython(env, cfg);
-  } catch (e) {
-    error = e.message;
-  }
   return {
-    python,
-    pythonSource: python === env.SOUNDTRY_PYTHON ? 'env'
-      : python === cfg.python ? 'config' : python ? 'plugin-venv' : 'none',
-    venvBase: python ? venvBase(python) : null,
-    cudaLib: (() => { try { return resolveCudaLib(env, cfg); } catch { return null; } })(),
+    ...st,
+    cudaLib: cudaLibFor(st.base),
     ffmpeg: env.DSH_FFMPEG_PATH || env.SOUNDTRY_FFMPEG || cfg.ffmpeg || null,
     device: env.SOUNDTRY_DEVICE || cfg.device || 'cuda',
     compute: env.SOUNDTRY_COMPUTE || cfg.compute || 'float16',
     pluginRoot: PLUGIN_ROOT,
-    error,
+    hint: st.ready
+      ? null
+      : '首次调用 sound_* 会自动安装依赖并下载模型（medium ≈ 1.46 GB）。有 ComfyUI 的话会直接借它的 torch，省 7 GB。',
   };
 }
 
 /**
  * 跑一个子命令。
- * @returns {Promise<{report: string, json: any}>}
+ * @param {string} subcommand
+ * @param {{args?: string[], env?: object, signal?: AbortSignal, timeoutMs?: number, onProgress?: (line: string) => void}} opts
+ * @returns {Promise<{report: string, json: any, stderr: string}>}
  */
-export function runSoundtry(subcommand, opts = {}) {
+export async function runSoundtry(subcommand, opts = {}) {
   const {
-    args = [], env = process.env, signal, timeoutMs = 30 * 60 * 1000,
+    args = [], env = process.env, signal, timeoutMs = 60 * 60 * 1000, onProgress,
   } = opts;
   const cfg = loadConfig(env);
-  const python = resolvePython(env, cfg);
-  const cudaLib = resolveCudaLib(env, cfg);
 
+  // 依赖没就绪时，这一段可能跑几分钟（下模型）。日志走 onProgress / stderr。
+  const ready = await ensureReady({
+    env,
+    signal,
+    log: (line) => { try { onProgress?.(line); } catch { /* 日志失败不影响安装 */ } },
+  });
+
+  const cudaLib = cudaLibFor(ready.base);
   const childEnv = { ...env, PYTHONIOENCODING: 'utf-8', KMP_DUPLICATE_LIB_OK: 'TRUE' };
   if (cudaLib) {
     childEnv.PATH = `${cudaLib};${env.PATH ?? ''}`;
@@ -138,11 +71,12 @@ export function runSoundtry(subcommand, opts = {}) {
   if (cfg.device) childEnv.SOUNDTRY_DEVICE = childEnv.SOUNDTRY_DEVICE || cfg.device;
   if (cfg.compute) childEnv.SOUNDTRY_COMPUTE = childEnv.SOUNDTRY_COMPUTE || cfg.compute;
   if (cfg.prompt) childEnv.SOUNDTRY_PROMPT = childEnv.SOUNDTRY_PROMPT || cfg.prompt;
+  childEnv.SOUNDTRY_MODEL = childEnv.SOUNDTRY_MODEL || ready.model;
 
   return new Promise((resolvePromise, reject) => {
     let child;
     try {
-      child = spawn(python, [SCRIPT, subcommand, ...args], {
+      child = spawn(ready.python, [SCRIPT, subcommand, ...args], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         env: childEnv,
@@ -194,11 +128,11 @@ export function runSoundtry(subcommand, opts = {}) {
       if (code !== 0) {
         const tail = stderr.trim().split('\n').slice(-6).join('\n');
         finish(reject, new Error(
-          `soundtry ${subcommand} 退出码 ${code}${json ? '' : ''}\n${report}\n${tail}`.trim(),
+          `soundtry ${subcommand} 退出码 ${code}\n${report}\n${tail}`.trim(),
         ));
         return;
       }
-      finish(resolvePromise, { report, json, stderr });
+      finish(resolvePromise, { report, json, stderr, mode: ready.mode, model: ready.model });
     });
   });
 }

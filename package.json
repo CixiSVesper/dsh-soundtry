@@ -1,7 +1,7 @@
 {
   "name": "dsh-soundtry",
-  "version": "0.1.0",
-  "description": "听声音的 DSH 插件：本地语音转写、BPM/拍点/切点对位、旋律曲线。借用本机 ComfyUI 的 Python 与 CUDA，不重复安装。",
+  "version": "1.0.0",
+  "description": "DSH 的本地听觉插件：转写/节奏/旋律/和弦/结构六件套。依赖显式声明在 deps.manifest.json，首次运行自动安装；有 ComfyUI 就借它的 torch，省 7 GB。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -9,27 +9,36 @@
     "audio",
     "asr",
     "whisper",
+    "medium",
     "bpm",
     "melody",
-    "faster-whisper"
+    "chord",
+    "structure",
+    "demucs"
   ],
   "license": "MIT",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./deps": "./src/deps.js",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
     "python",
     "docs",
+    "deps.manifest.json",
     "cordis.patch.yml",
     "dsh.plugin.json",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node src/deps.js",
+    "doctor": "node -e \"import('./src/runner.js').then(m=>console.log(JSON.stringify(m.environmentReport(),null,2)))\""
   },
   "dsh": {
     "bundle": {

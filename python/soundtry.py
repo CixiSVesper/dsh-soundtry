@@ -28,6 +28,7 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PLUGIN_ROOT / "models"
+DEFAULT_MODEL = os.environ.get("SOUNDTRY_MODEL", "medium")   # 1.0：默认 medium（1.4 GB），不再用 large-v3（2.9 GB）
 CACHE_DIR = PLUGIN_ROOT / "cache"
 JSON_MARK = "@@JSON@@"
 
@@ -1228,9 +1229,16 @@ def cmd_doctor(args):
     except SystemExit as e:
         add("ffmpeg", False, str(e))
 
-    model = MODELS_DIR / "large-v3"
-    add("模型 large-v3", model.is_dir() and (model / "model.bin").is_file(),
-        f"{model} ({(model / 'model.bin').stat().st_size / 1024**2:.0f} MB)" if (model / "model.bin").is_file() else str(model))
+    for mname in (DEFAULT_MODEL, "large-v3"):
+        mdir = MODELS_DIR / mname
+        have = mdir.is_dir() and (mdir / "model.bin").is_file()
+        size = f"{(mdir / 'model.bin').stat().st_size / 1024**2:.0f} MB" if have else ""
+        if mname == DEFAULT_MODEL:
+            add(f"模型 {mname}（默认）", have, f"{mdir} {size}".strip())
+        else:
+            # 备用模型缺失不算失败——1.0 默认只用 medium，large-v3 是可选的。
+            add(f"模型 {mname}（备用，可选）" + ("" if have else " — 未下载，用不到可以不管"),
+                True, f"{mdir} {size}".strip())
 
     for name, ok, detail in rows:
         print(f"{'ok  ' if ok else 'FAIL'} {name} — {detail}")
@@ -1246,7 +1254,7 @@ def main():
 
     def common(p):
         p.add_argument("input")
-        p.add_argument("--model", default="large-v3")
+        p.add_argument("--model", default=os.environ.get("SOUNDTRY_MODEL", "medium"))
         p.add_argument("--device", default=os.environ.get("SOUNDTRY_DEVICE", "cuda"))
         p.add_argument("--compute", default=os.environ.get("SOUNDTRY_COMPUTE", "float16"))
         p.add_argument("--lang", default="zh")

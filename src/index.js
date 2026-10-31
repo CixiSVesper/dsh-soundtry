@@ -1,8 +1,8 @@
-﻿/**
+/**
  * index.js — DSH-SoundTry 插件入口。
  *
- * 把"听"这件事变成四个本地工具：所有重活都在 python/soundtry.py 里跑，
- * Python 与 CUDA 从 ComfyUI 借（见 docs/ENVIRONMENT.md），不重复安装。
+ * 1.0：六个工具，依赖声明在 deps.manifest.json。首次调用自动装依赖 + 下模型；
+ * 装了 ComfyUI 的话优先借它的 torch / CUDA（省 7 GB），否则整套装进插件 venv。
  */
 import { readSpec, transcribeSpec, rhythmSpec, melodySpec, chordsSpec, structureSpec } from './tools.js';
 import { environmentReport } from './runner.js';
@@ -16,10 +16,11 @@ function fail(error) {
 }
 
 export async function apply(ctx) {
-  // 一次环境体检：缺 Python / 缺 CUDA 运行库都在这里说清楚，而不是等第一次调用失败。
+  // 只报状态，不在这里装东西（安装放到第一次真实调用，避免启动时卡住）
   const env = environmentReport();
-  if (!env.python) {
-    console.error(`[soundtry] ${env.error}`);
+  if (!env.ready) {
+    console.error(`[soundtry] ${env.hint}`);
+    console.error(`[soundtry] 依赖源: ${env.base ?? "未找到"}${env.baseWhy ? ` (${env.baseWhy})` : ""}`);
   } else if (process.env.DSH_SOUNDTRY_DEBUG) {
     console.error(`[soundtry] ${JSON.stringify(env)}`);
   }

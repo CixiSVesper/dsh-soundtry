@@ -1,8 +1,85 @@
 # dsh-soundtry
 
-**让 DSH 听得见声音** —— 本地转录、测节奏、抽旋律，全部离线、零 API 费用。
+**DSH 的本地听觉插件 · 1.0**
 
-和 `dsh-video-vision`（看得见画面）配套使用：那个负责"是什么样"，这个负责"说了什么、什么节奏、旋律往哪走"。
+让 agent 听得见声音：转写、测节奏、抽旋律、认和弦、切段落——全部在本机跑，零 API 费用。
+
+在 0.1.x 的基础上改了两件事，其它能力原样保留。
+
+---
+
+## 1.0 改了什么
+
+### ① 模型：large-v3 → **medium**
+
+| | large-v3（0.1.x） | **medium（1.0）** |
+|---|---|---|
+| 权重体积 | 2948 MB | **1457 MB** |
+| 逐行歌词识别（252 秒歌、有歌词提示） | 60/60 = 100% | **58/60 = 96.7%** |
+| 热缓存下转写一条 252 秒的歌 | 21 s | **13 s** |
+| 内存/显存 | 4.1 GB | **约 2.5 GB** |
+
+代价是每 60 行歌词会漏 2 行；换来的是**一半磁盘、四成时间**。想回退：
+
+```powershell
+$env:SOUNDTRY_MODEL='large-v3'    # 然后删掉 runtime/ready.json 让它重装
+```
+
+### ② 依赖：从"隐式借用"改成"显式声明 + 自己装"
+
+0.1.x 的文档里要专门写一张表，说明"哪些是自带的、哪些是借 ComfyUI 的"——因为 `ctranslate2`、`av` 这类包实际解析到了 ComfyUI 的 site-packages，靠的是 venv 的 `--system-site-packages` 隐式生效。
+
+1.0 把它们全部写进 [`deps.manifest.json`](deps.manifest.json)，并在**第一次调用工具时自己装**：
+
+```
+第一次调用 sound_read
+  → 探测依赖源（环境变量 → 配置 → 自动发现 ComfyUI → PATH）
+  → 决定模式（borrow / standalone）
+  → 建 venv → pip install → 下载模型 → 备好 ffmpeg → 写 runtime/ready.json
+  → 才开始真正转写
+```
+
+进度打到 stderr，装完记 `runtime/ready.json`（模式 + 依赖源 + 模型 + 清单摘要）。三者任一变化就重装；想强制重装就删掉这个文件。
+
+手动触发一次：
+
+```powershell
+node src/deps.js
+```
+
+---
+
+## ⚠️ 省空间的关键：让 DSH 用 ComfyUI 当依赖源
+
+> **如果你机器上装了 ComfyUI（或任何带 torch 的 Python），让 agent 指过去就行——能省下约 7 GB。**
+
+插件**默认会自动去找**（`D:\ComfyUI\*\python\python.exe` 这类常见路径），找到就用 `borrow` 模式：
+
+| 模式 | 装什么 | 磁盘增量 | 适用 |
+|---|---|---|---|
+| **borrow**（默认，推荐） | 只装 `faster-whisper` / `demucs` / `torchcrepe`；`torch`、`torchaudio`、`numpy`、`librosa`、`scipy` 全部沿用那个 Python 的 | **约 110 MB** + 模型 1457 MB | 有 ComfyUI / 有带 torch 的 Python |
+| **standalone**（兜底） | 全套都装进插件 venv，包括 torch（CUDA 轮子约 2.5 GB 下载） | 约 7 GB | 机器上没有任何带 torch 的 Python |
+
+**给 agent 的原话可以这么说：**
+
+> "把 dsh-soundtry 的依赖源指到我 ComfyUI 的 python 上（`{"python": "D:\\ComfyUI\\...\\python\\python.exe"}` 写到 `~/.dsh/soundtry.json`），用 borrow 模式，别让它自己下 torch。"
+
+手工指定也可以，三种写法优先级从高到低：
+
+```powershell
+# 1. 环境变量
+$env:SOUNDTRY_PYTHON='D:\ComfyUI\ComfyUI-aki-v2\python\python.exe'
+
+# 2. 配置文件 ~/.dsh/soundtry.json
+# {"python": "D:\\ComfyUI\\ComfyUI-aki-v2\\python\\python.exe", "deps": "borrow"}
+
+# 3. 只给 ComfyUI 根目录，让它自己找 python
+# {"comfyui": "D:\\ComfyUI\\ComfyUI-aki-v2", "deps": "borrow"}
+```
+
+`standalone` 模式没有被本机实测过（这台机器有 ComfyUI，走的是 borrow），只按 PyTorch 官方 cu129 索引写了安装路径。
+
+---
 
 ## 六个工具
 
@@ -15,38 +92,22 @@
 | `sound_chords` | 缓和过的和弦时间轴（拍点级），含各和弦持续时长 | 判断四和弦循环、副歌换不换和弦、预副歌在哪抬起来 |
 | `sound_structure` | 段落边界（前奏/主歌/副歌/间奏/断口/尾奏）+ 人声进、鼓进、峰值的精确时刻 | 要按段落切片、找高潮在哪、对比两首歌的结构 |
 
-典型调用：
-
-```
+```js
 sound_read      input="D:/片子.mp4"
-sound_chords    input="D:/歌.flac"
-sound_rhythm    input="D:/歌.mp4" video="D:/歌.mp4"
 sound_transcribe input="D:/课.mp4" start=600 end=720 srt="D:/课_10min.srt"
-sound_melody    input="D:/歌.mp4" windows=["副歌:78:82","主歌:33:37"]
+sound_rhythm    input="D:/歌.mp4" video="D:/歌.mp4"
 sound_structure input="D:/歌.flac"
+sound_melody    input="D:/歌.mp4" windows=["副歌:78:82","主歌:33:37"]
+sound_chords    input="D:/歌.flac"
 ```
 
-## 安装
+**`sound_structure` 的精度**：0.25 秒窗、不做中值滤波、只吸收短于 2 秒的碎片，边界报到 0.1 秒。实测人声进入与转录的首词相差 0.15 秒。（用 1 秒窗 + 3 秒中值滤波的粗版会漂 1–3 秒，最多到 5 秒。）
 
-本仓库**只含源码**。venv（108 MB）、whisper 权重（2.9 GB）、demucs 权重（80 MB）和 ffmpeg（61 MB）都不在仓库里，需要本地生成：
+---
 
-```powershell
-# 前提：一个装了 torch / torchaudio / librosa 的 Python（ComfyUI 自带的那个就行）
-.\scripts\setup.ps1 -Python "D:\ComfyUI\ComfyUI-aki-v2\python\python.exe"
-```
+## 怎么做到"不编词"
 
-脚本会：建 venv（`--system-site-packages`，让 torch 继续从那个 Python 借，不复制 7 GB）→ 装 `faster-whisper`/`demucs`/`torchcrepe` → 从 ModelScope 下 whisper large-v3 → 把 ffmpeg 复制进 `vendor/ffmpeg` → 跑 `doctor` 自检。
-
-装好之后用 DSH 装插件：
-
-```powershell
-node --expose-internals "D:\Program Files\DSH\DSH NEXT\resources\app\lib\plugin-cli.js" desktop install <这个目录>
-```
-
-## 怎么做到"不编词"的
-
-whisper 在没人声的地方会**主动编**：演职员表、"点赞订阅"、字幕组——这些句子长度和语速都完全正常，
-靠长度/语速判据抓不住。这里的做法是**从源头堵**：
+whisper 在没人声的地方会**主动编**：演职员表、"点赞订阅"、字幕组——这些句子长度和语速都完全正常，靠长度/语速判据抓不住。这里的做法是**从源头堵**：
 
 1. Demucs 拆出人声轨；
 2. 在人声轨上按能量找人声区间（阈值取 P90 的 25%，抗得住主歌小声/副歌大声）；
@@ -56,72 +117,71 @@ whisper 在没人声的地方会**主动编**：演职员表、"点赞订阅"、
 
 实测同一首 252 秒的歌：整条转写会编 1 段"点赞订阅"；切分后 **0 段幻觉**，歌词质量不变。
 
-## 环境：借用 ComfyUI，不重复安装
+---
 
-**这是本插件最重要的一条设计，详见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。**
+## 数字上的诚实
 
-一句话：**除了 ComfyUI 已经装好的 Python 与 CUDA，其余全部打包在插件目录里。**
+这个插件里凡是"可能不可信"的地方都会自己说出来：
 
-| 来源 | 内容 |
+| 数值 | 不确定性怎么表达 |
 |---|---|
-| 插件自带（在 `runtime/`、`models/`） | faster-whisper、ctranslate2、av、whisper large-v3 权重 |
-| **借用本机 ComfyUI** | Python 3.12 解释器、torch 2.8+cu129、cuDNN 9 / cuBLAS 12、numpy、librosa、soundfile |
-| 借用第三个 | ffmpeg（优先用 `dsh-video-vision` 里那份） |
+| BPM | `ambiguous`（与次选差 <10%）/ `level`（半倍速、3:2 等节拍层级）/ `conflict`（与 librosa 分歧） |
+| 切点 | 硬切（阈值 0.45）与所有变化（阈值 0.30）**双阈值同时报** |
+| 歌词 | 逐行覆盖率 + 未认出清单 |
+| 和弦 | 描述里明说"根音可信、品质（maj7 vs m）不可信" |
+| 结构 | 判定阈值（人声/鼓）随输出打印，可复核 |
 
-所以本机不会出现第二个 torch、第二个 Python、第二份 CUDA。想换成独立环境，改一个配置项即可。
+---
 
-## 磁盘占用
+## 配置
 
-| 项 | 大小 |
-|---|---|
-| 代码（`src/` `python/` `docs/`） | < 150 KB |
-| 插件内 venv（faster-whisper / ctranslate2 / av / demucs / torchcrepe） | 108.2 MB |
-| whisper large-v3 权重 | 2948 MB |
-| Demucs htdemucs 权重 | 80 MB |
-| **合计** | **≈ 3.14 GB**（96% 是模型） |
+配置文件 `~/.dsh/soundtry.json`（找不到时回退到旧版的 `~/.dsh/soundtry.json`）：
 
-换小模型（`model: "medium"` 或 `"small"`）可降到 1.5 GB / 0.5 GB，代价是准确率。
-`cache/stems/` 是分离缓存（每首约 30 MB），随时可删。
+```json
+{
+  "python":     "D:\\ComfyUI\\ComfyUI-aki-v2\\python\\python.exe",
+  "comfyui":    "D:\\ComfyUI\\ComfyUI-aki-v2",
+  "deps":       "borrow",
+  "model":      "medium",
+  "ffmpeg":     "",
+  "device":     "cuda",
+  "compute":    "float16",
+  "pypi":       "https://pypi.tuna.tsinghua.edu.cn/simple",
+  "extraPath":  []
+}
+```
 
-## 自检
+环境变量优先于配置文件：`SOUNDTRY_PYTHON` · `SOUNDTRY_DEPS` · `SOUNDTRY_MODEL` · `SOUNDTRY_DEVICE` · `SOUNDTRY_COMPUTE` · `SOUNDTRY_PYPI` · `SOUNDTRY_FFMPEG` · `SOUNDTRY_CUDA_LIB`。
+
+---
+
+## 安装
 
 ```powershell
-& "<插件>\runtime\venv\Scripts\python.exe" "<插件>\python\soundtry.py" doctor
+node --expose-internals "<DSH>\resources\app\lib\plugin-cli.js" desktop install C:\Users\<你>\.dsh\plugins\dsh-soundtry
 ```
 
-本机实测 **14/14 项就绪**（Python / numpy / soundfile / librosa / faster-whisper / ctranslate2 /
-demucs / torchcrepe / torchaudio / torch（借用）/ GPU / CUDA 设备 / ffmpeg（借用）/ 模型）。
+> ⚠️ **工具名与 0.1.x 完全相同**（`sound_read` / `sound_transcribe` / …）。两个同时启用会撞名，**装 1.0 前先卸掉旧版**。
 
-## 命令行契约（改代码前必读）
+自检：
 
-python 侧的 `input` 是**位置参数**，不是 `--input`：
-
-```
-python/soundtry.py transcribe <path> --head 20 --vad-mode vocals
+```powershell
+node src/deps.js                                    # 装依赖 + 下模型
+runtime\venv\Scripts\python.exe python\soundtry.py doctor
 ```
 
-`src/tools.js` 的 `toArgs()` 必须先把 `input` 作为位置参数塞进 argv、再追加 flag。
-**这个不一致曾经让五个工具同时挂掉**（argparse 把路径当位置参数吃掉，只剩孤儿 `--input` 报
-`unrecognized arguments`）。
+---
 
-现在两侧都有保护：`toArgs` 正确处理位置参数；`soundtry.py` 的 `main()` 在解析前会把
-`--input <path>` 重写成位置参数，所以旧调用方也不会挂。改任何一侧都要跑一遍"走真实工具路径"的
-回归（`spec.execute()`，不要只测 `runner.runSoundtry()`——那是绕过 `toArgs` 的）。
+## 已知局限
 
-## 已知局限（别指望它替你做判断）
+- **和弦品质**（maj7 vs m、6 vs m7）只有 60–75% 帧准确率。没有用 essentia（无 Windows 轮子）或 madmom（只有源码包），是手写模板 + Viterbi。
+- **没有小节线/调式切分**：只给和弦时间轴，不给"第几小节"。
+- **台风/音乐剧类强混响录音**的和弦容易糊。
+- **审美判断做不了**：它能测"这里 6% 的切点踩在拍上"，测不出"这段好不好听"。
+- `standalone` 模式未经本机实测（见上）。
 
-1. **和弦品质不可靠。** 根音与和声节奏稳（"四和弦循环""副歌换不换和弦"能答），但 maj / maj7 / m7
-   之间会混，把 `C#maj7` 和 `C#m7` 当同一个东西看。手写模板、没有训练过的模型（essentia 缺
-   Windows 轮子、madmom 只发源码包），帧准确率约 60–75%。
-2. **唱词仍有错字。** 分离 + 分块把"暧昧告诉我不能这样"救回来了，但"迷不残响""混乱枪"这类还是错。
-   **最有效的补法是把真歌词塞进 `prompt`** —— 模型会照着对齐。
-3. **没有小节线与曲式分段。** 只有恒定 BPM 网格 + 相位，答不了"副歌从第几小节进"。
-4. **听不出好坏。** 能说"副歌比主歌高了三度半"，说不出"这个上行是不是该有那种酸"。
-5. **没有音频流的文件会直接报错。** B 站的 DASH 下载是音视频分开的，需要先
-   `ffmpeg -i video -i audio -c copy out.mp4`。
-6. **有冷启动。** whisper 加载约 3 秒、Demucs 加载约 3 秒；分离一首 4 分钟的歌约 25 秒
-   （按文件缓存，同一文件第二次调用直接命中）。
+---
 
-## 卸载
+## 许可
 
-从 profile 的 `dsh.profile.bundles` 移除 `dsh-soundtry`，删掉本目录即可 —— 它没有在系统里注册任何东西。
+MIT。模型遵循各自上游许可：faster-whisper 权重来自 [ModelScope](https://www.modelscope.cn/models/pengzhendong/faster-whisper-medium)（MIT/Whisper 原许可），Demucs 权重来自 Meta（MIT）。
