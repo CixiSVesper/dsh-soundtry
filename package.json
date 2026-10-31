@@ -1,0 +1,39 @@
+{
+  "name": "dsh-soundtry",
+  "version": "0.1.0",
+  "description": "听声音的 DSH 插件：本地语音转写、BPM/拍点/切点对位、旋律曲线。借用本机 ComfyUI 的 Python 与 CUDA，不重复安装。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "audio",
+    "asr",
+    "whisper",
+    "bpm",
+    "melody",
+    "faster-whisper"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "python",
+    "docs",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

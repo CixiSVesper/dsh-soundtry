@@ -1,0 +1,11 @@
+{
+  "name": "dsh-soundtry",
+  "description": "Local audio understanding for DeepSeek Harness: transcription, rhythm (BPM/beats/cut alignment), melody. Borrows the machine's ComfyUI Python + CUDA instead of installing a second copy.",
+  "version": "0.1.0",
+  "entry": {
+    "name": "dsh-soundtry",
+    "inject": [
+      "tools"
+    ]
+  }
+}
