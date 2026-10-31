@@ -26,13 +26,14 @@
                     "./package.json":  "./package.json"
                 },
     "files":  [
-                  "src",
-                  "python",
-                  "docs",
+                  "src/*.js",
+                  "python/*.py",
+                  "docs/*.md",
                   "deps.manifest.json",
                   "cordis.patch.yml",
                   "dsh.plugin.json",
-                  "README.md"
+                  "README.md",
+                  "LICENSE"
               ],
     "engines":  {
                     "node":  "\u003e=20"
@@ -51,5 +52,18 @@
 
                                           ]
                            }
-            }
+            },
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/CixiSVesper/dsh-soundtry.git"
+                   },
+    "homepage":  "https://github.com/CixiSVesper/dsh-soundtry#readme",
+    "bugs":  {
+                 "url":  "https://github.com/CixiSVesper/dsh-soundtry/issues"
+             },
+    "author":  "CixiSVesper",
+    "publishConfig":  {
+                          "access":  "public",
+                          "registry":  "https://registry.npmjs.org"
+                      }
 }
