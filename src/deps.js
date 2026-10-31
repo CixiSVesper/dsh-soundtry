@@ -60,8 +60,9 @@ function manifestKey(manifest, model) {
     standalone: manifest.modes?.standalone?.pip ?? [],
   };
   const files = manifest.models?.[model]?.files ?? [];
-  // 不含 manifest.version：改版本号不该触发重装，只有依赖清单/模型变了才重装。
-  return JSON.stringify({ deps, files, model });
+  const assets = (manifest.assets ?? []).map((a) => `${a.name}:${a.expectBytes}`);
+  // 不含 manifest.version：改版本号不该触发重装，只有依赖清单/模型/资产变了才重装。
+  return JSON.stringify({ deps, files, assets, model });
 }
 
 function readMarker() {
@@ -231,6 +232,37 @@ async function ensureModel(model, manifest, log, signal) {
 }
 
 /**
+ * 额外资产（1.0.2 起）：MDX-Net 分离权重。
+ * 这些**不进仓库** —— 仓库只记 URL 和字节数，用户首次运行时下到 models/ 下。
+ * 缺了不报错：分离会自动退到 demucs / hpss。
+ */
+async function ensureAssets(manifest, log, signal) {
+  for (const a of manifest.assets ?? []) {
+    const dest = join(PLUGIN_ROOT, a.file);
+    if (fs.existsSync(dest)) {
+      if (!a.expectBytes || Math.abs(fs.statSync(dest).size - a.expectBytes) / a.expectBytes < 0.01) {
+        log(`[deps] ${a.name} 已存在`);
+        continue;
+      }
+      log(`[deps] ${a.name} 大小不对，重新下载`);
+      await fsp.rm(dest, { force: true });
+    }
+    try {
+      await downloadFile(a.url, dest, log, signal);
+      if (a.expectBytes) {
+        const got = fs.statSync(dest).size;
+        const pct = (Math.abs(got - a.expectBytes) / a.expectBytes) * 100;
+        log(`[deps] ${a.name} ${(got / 1024 ** 2).toFixed(1)} MB（差 ${pct.toFixed(2)}%）`);
+        if (pct > 1) throw new Error('大小不符，可能被镜像/重定向替换');
+      }
+    } catch (e) {
+      if (a.required) throw e;
+      log(`[deps] ⚠ ${a.name} 下载失败（${e.message}）；分离会退到 demucs/hpss`);
+    }
+  }
+}
+
+/**
  * ffmpeg 也按"自己备"处理：优先复制机器上已有的那份（PATH → 旧版插件的 vendor →
  * dsh-video-vision 自带的那份），复制不到才提示手动放。
  * 这样插件不依赖任何别的插件，也不重复下载 60 MB。
@@ -314,6 +346,7 @@ export async function ensureReady({ env = process.env, log = () => {}, signal, f
   await pipInstall(VENV_PY, spec.pip ?? [], { mirror, log });
 
   await ensureModel(model, manifest, log, signal);
+  await ensureAssets(manifest, log, signal);
   await ensureFfmpeg(env, cfg, log);
 
   await writeMarker({ key, mode, base: found.python, python: VENV_PY, model, at: new Date().toISOString() });

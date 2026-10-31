@@ -151,7 +151,7 @@ def _read_stems(outdir):
     return got
 
 
-def stems_for(path: str, use_gpu: bool = True):
+def stems_for(path: str, use_gpu: bool = True, separator: str = None):
     """Demucs 分轨，缓存到 <插件>/cache/stems/<size>-<mtime>/。
 
     **进程隔离**：Demucs（torch）默认在子进程里跑，只把 flac 写到磁盘；主进程再读回来。
@@ -166,6 +166,7 @@ def stems_for(path: str, use_gpu: bool = True):
         return _stem_cache[key]
 
     outdir = _stems_dir(path)
+    sep = (separator or os.environ.get("SOUNDTRY_SEPARATOR") or "auto").strip().lower()
 
     # 缓存命中：只读文件，此路径完全不 import torch
     got = _read_stems(outdir)
@@ -173,28 +174,180 @@ def stems_for(path: str, use_gpu: bool = True):
         _stem_cache[key] = got
         return got
 
-    # 未命中：优先让子进程做分离
-    if os.environ.get("SOUNDTRY_INPROC_SEPARATE") != "1":
+    # ① ONNX（MDX-Net）：默认后端，全程不碰 torch
+    if sep in ("auto", "onnx") and mdx_model_path():
         try:
-            cmd = [sys.executable, str(Path(__file__).resolve()), "stems", path]
-            if not use_gpu:
-                cmd.append("--no-gpu")
-            r = subprocess.run(cmd, capture_output=True, timeout=1800)
-            if r.returncode == 0:
-                got = _read_stems(outdir)
-                if got:
-                    _stem_cache[key] = got
-                    return got
-            else:
-                # 子进程输出按 UTF-8 解、坏字节替换掉：Windows 上管道默认走 GBK，
-                # 中文日志会直接抛 UnicodeDecodeError，把"分离成功"误判成失败。
-                raw = (r.stderr or b"") + (r.stdout or b"")
-                tail = raw.decode("utf-8", "replace").strip().splitlines()[-3:]
-                print("# （子进程分离失败，改在本进程内做：" + " | ".join(tail) + "）")
+            got = _separate_onnx(path, outdir)
+            if got:
+                _stem_cache[key] = got
+                print("# （分离后端：MDX-Net ONNX，onnxruntime，无 torch）")
+                return got
         except Exception as e:
-            print(f"# （子进程分离异常，改在本进程内做：{type(e).__name__}）")
+            print(f"# （MDX 分离失败：{type(e).__name__}: {e}；尝试下一个后端）")
 
-    return _stems_inproc(path, outdir, key, use_gpu)
+    # ② Demucs：子进程隔离
+    if sep in ("auto", "demucs") and _demucs_available():
+        if os.environ.get("SOUNDTRY_INPROC_SEPARATE") != "1":
+            try:
+                cmd = [sys.executable, str(Path(__file__).resolve()), "stems", path]
+                if not use_gpu:
+                    cmd.append("--no-gpu")
+                r = subprocess.run(cmd, capture_output=True, timeout=1800)
+                if r.returncode == 0:
+                    got = _read_stems(outdir)
+                    if got:
+                        _stem_cache[key] = got
+                        print("# （分离后端：Demucs，子进程）")
+                        return got
+                else:
+                    # 子进程输出按 UTF-8 解、坏字节替换掉：Windows 上管道默认走 GBK，
+                    # 中文日志会直接抛 UnicodeDecodeError，把"分离成功"误判成失败。
+                    raw = (r.stderr or b"") + (r.stdout or b"")
+                    tail = raw.decode("utf-8", "replace").strip().splitlines()[-3:]
+                    print("# （子进程分离失败，改在本进程内做：" + " | ".join(tail) + "）")
+            except Exception as e:
+                print(f"# （子进程分离异常，改在本进程内做：{type(e).__name__}）")
+        got = _stems_inproc(path, outdir, key, use_gpu)
+        if got:
+            return got
+
+    # ③ HPSS：零依赖兜底（质量差，只保证不空手）
+    if sep in ("auto", "hpss"):
+        got = _stems_hpss(path, outdir)
+        if got:
+            _stem_cache[key] = got
+            print("# （分离后端：HPSS，仅谐波/打击分离 —— 质量有限，和弦与旋律会被污染）")
+            return got
+
+    _stem_cache[key] = None
+    return None
+
+
+def mdx_model_path():
+    """MDX-Net 权重在哪（deps 会下到 models/uvr/）。"""
+    for name in ("Kim_Vocal_2.onnx", "UVR-MDX-NET-Voc_FT.onnx"):
+        p = MODELS_DIR / "uvr" / name
+        if p.is_file():
+            return p
+    return None
+
+
+def _demucs_available():
+    try:
+        import importlib.util
+        return importlib.util.find_spec("demucs") is not None
+    except Exception:
+        return False
+
+
+def _separate_onnx(path, outdir, n_fft=7680, hop=1024, sr=44100, dim_t=256):
+    """MDX-Net（UVR）分离，纯 onnxruntime —— 不用 torch。
+
+    参数不是猜的：dim_f/dim_t 来自模型输入形状；n_fft=7680 是用已知歌词实测选出来的
+    （7680 → 逐行 49/58 = 85%，6144 → 42/58 = 72%）。
+    做法是整轨 STFT + 每 256 帧一块过模型，避免 UVR 那套 chunk 边界补偿。
+    """
+    import librosa
+    import numpy as np
+    import onnxruntime as ort
+
+    model = mdx_model_path()
+    if not model:
+        raise RuntimeError("没有 MDX 权重（models/uvr/*.onnx）")
+
+    so = ort.SessionOptions()
+    so.log_severity_level = 3
+    so.intra_op_num_threads = max(1, (os.cpu_count() or 4) - 1)
+    sess = ort.InferenceSession(str(model), so, providers=["CPUExecutionProvider"])
+    dim_f = int(sess.get_inputs()[0].shape[2])
+
+    # 解码成 44.1k 立体声
+    with tempfile.TemporaryDirectory() as td:
+        wav = os.path.join(td, "in.wav")
+        subprocess.run(
+            [find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error",
+             "-i", path, "-vn", "-ac", "2", "-ar", str(sr), "-c:a", "pcm_s16le", "-y", wav],
+            check=True, capture_output=True,
+        )
+        import soundfile as sf
+        y, _ = sf.read(wav, dtype="float32", always_2d=True)
+    if y.size == 0:
+        raise RuntimeError("解出来的音轨为空")
+    if y.shape[1] == 1:
+        y = np.repeat(y, 2, axis=1)
+    y = np.ascontiguousarray(y[:, :2].T)          # (2, N)
+
+    specs = [librosa.stft(y[c], n_fft=n_fft, hop_length=hop, window="hann", center=True)
+             for c in range(2)]
+    bins, T = specs[0].shape
+    outs = [np.zeros((bins, T), dtype=np.complex64) for _ in range(2)]
+
+    n_blocks = int(np.ceil(T / dim_t))
+    for b in range(n_blocks):
+        t0, t1 = b * dim_t, min((b + 1) * dim_t, T)
+        w = t1 - t0
+        block = np.zeros((4, dim_f, dim_t), dtype=np.float32)
+        f = min(dim_f, bins)
+        for c in range(2):
+            s = specs[c][:, t0:t1]
+            block[c * 2, :f, :w] = s[:f].real
+            block[c * 2 + 1, :f, :w] = s[:f].imag
+        res = sess.run(None, {"input": block[None]})[0][0]
+        for c in range(2):
+            outs[c][:f, t0:t1] = res[c * 2, :f, :w] + 1j * res[c * 2 + 1, :f, :w]
+
+    voc = np.stack([librosa.istft(outs[c], hop_length=hop, window="hann",
+                                  center=True, length=y.shape[1]) for c in range(2)])
+    voc = voc[:, :y.shape[1]]
+    inst = y - voc
+
+    def rms(x):
+        return float(np.sqrt(np.mean(np.asarray(x, dtype="float64") ** 2)))
+
+    r_mix, r_voc = rms(y), rms(voc)
+    if r_voc > 1e-9 and r_mix > 1e-9:
+        voc *= (r_mix / r_voc) * 0.9     # 电平对齐（模型自带的 compensate 未知）
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    got = {}
+    import soundfile as sf
+    for name, arr in (("vocals", voc), ("other", inst)):
+        mono = arr.mean(axis=0)
+        y16 = _resample_to_16k(mono, sr)
+        sf.write(str(outdir / f"{name}.flac"), y16, 16000, format="FLAC")
+        got[name] = y16
+    # MDX 是 2-stem：鼓与贝斯没有单独分离。
+    # 鼓：从**原始混音**取打击分量 —— 不能从去掉人声的伴奏取，那样鼓会被削掉大半，
+    #     结构分析会把"有鼓"误判成"没鼓"。贝斯留空（和弦只用 other）。
+    import librosa as _lr
+    perc = _lr.effects.hpss(_resample_to_16k(y.mean(axis=0), sr), margin=(1.0, 5.0))[1]
+    sf.write(str(outdir / "drums.flac"), perc.astype("float32"), 16000, format="FLAC")
+    got["drums"] = perc.astype("float32")
+    bass = np.zeros_like(got["other"])
+    sf.write(str(outdir / "bass.flac"), bass, 16000, format="FLAC")
+    got["bass"] = bass
+    (outdir / "backend.txt").write_text("mdx-onnx\n", encoding="utf-8")
+    return got
+
+
+def _stems_hpss(path, outdir):
+    """零依赖兜底：只分谐波/打击。质量明显不如 MDX/Demucs，仅用于"至少能跑"。"""
+    import librosa
+    import numpy as np
+    import soundfile as sf
+
+    y16 = load_audio(path)
+    y = librosa.resample(y16, orig_sr=16000, target_sr=22050)
+    harm, perc = librosa.effects.hpss(y, margin=(1.0, 5.0))
+    harm16 = _resample_to_16k(harm, 22050)
+    perc16 = _resample_to_16k(perc, 22050)
+    outdir.mkdir(parents=True, exist_ok=True)
+    got = {"vocals": harm16, "other": harm16,
+           "drums": perc16, "bass": np.zeros_like(harm16)}
+    for name, arr in got.items():
+        sf.write(str(outdir / f"{name}.flac"), arr.astype("float32"), 16000, format="FLAC")
+    (outdir / "backend.txt").write_text("hpss\n", encoding="utf-8")
+    return got
 
 
 def _stems_inproc(path, outdir, key, use_gpu):
@@ -1369,8 +1522,10 @@ def main():
         p.add_argument("--end", type=float, default=None)
         p.add_argument("--lyrics", default=None,
                        help="真歌词文本文件：自动用它生成 prompt，并在结尾报告逐行覆盖率")
+        p.add_argument("--separator", choices=["auto", "onnx", "demucs", "hpss", "none"], default=None,
+                       help="分离后端：auto=onnx>demucs>hpss；onnx=MDX-Net(无torch)；demucs；hpss=零依赖兜底")
         p.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True,
-                       help="先用 Demucs 分人声（默认开；--no-separate 退回混合信号）")
+                       help="先用分离器分出人声（默认开；--no-separate 退回混合信号）")
 
     p = sub.add_parser("transcribe"); common(p); p.set_defaults(func=cmd_transcribe)
     p.add_argument("--include-cues", action="store_true")
@@ -1383,11 +1538,13 @@ def main():
 
     p = sub.add_parser("melody")
     p.add_argument("input"); p.add_argument("--window", action="append", default=[])
+    p.add_argument("--separator", choices=["auto", "onnx", "demucs", "hpss", "none"], default=None)
     p.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True)
     p.set_defaults(func=cmd_melody)
 
     p = sub.add_parser("chords")
     p.add_argument("input")
+    p.add_argument("--separator", choices=["auto", "onnx", "demucs", "hpss", "none"], default=None)
     p.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True)
     p.set_defaults(func=cmd_chords)
 
@@ -1395,6 +1552,7 @@ def main():
     p.add_argument("input")
     p.add_argument("--window", type=float, default=0.25, help="分析窗长（秒），默认 0.25")
     p.add_argument("--min-len", type=float, default=2.0, help="短于此长度的碎片并入邻居，默认 2 秒")
+    p.add_argument("--separator", choices=["auto", "onnx", "demucs", "hpss", "none"], default=None)
     p.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True)
     p.set_defaults(func=cmd_structure)
 
@@ -1424,6 +1582,8 @@ def main():
         argv = argv[:i] + [val] + argv[i + 2:]
 
     args = ap.parse_args(argv)
+    if getattr(args, "separator", None):
+        os.environ["SOUNDTRY_SEPARATOR"] = args.separator
     if getattr(args, "vad_mode", None) is None:
         args.vad_mode = "mix" if getattr(args, "vad", False) else "auto"
     if args.cmd != "doctor" and not Path(args.input).is_file():

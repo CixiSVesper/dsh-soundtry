@@ -1,6 +1,55 @@
 # dsh-soundtry
 
-**DSH 的本地听觉插件 · 1.0.1**
+**DSH 的本地听觉插件 · 1.0.2**
+
+## 1.0.2：分离后端换成 MDX-Net（onnxruntime，无 torch）
+
+这一版把**人声分离**从 Demucs（torch）换成了 **UVR MDX-Net 的 ONNX 模型**，用 onnxruntime 推理。
+torch 从此在整条主路径上都不再需要。
+
+同一首快嘴说唱（卦者灵风《阳光开朗大男孩》，206.7 秒，已知官方歌词，whisper medium + 歌词提示）：
+
+| 分离方式 | 逐行命中 | 分离耗时 | 依赖 |
+|---|---|---|---|
+| **MDX-Net Kim_Vocal_2（默认）** | **49/58 = 85%** | 89 s（CPU） | **onnxruntime（无 torch）** |
+| Demucs htdemucs | 46/58 = 79% | 25 s（GPU） | torch 7.2 GB |
+| 不分离 | 46/58 = 79% | 0 | — |
+| HPSS（零依赖兜底） | — | 极快 | 无，但质量差 |
+
+**质量反而更好，代价是慢 3.5 倍**（CPU 89 秒 vs GPU 25 秒）。要 GPU 加速得装 onnxruntime-gpu，
+它要求的 cuDNN 版本和 ComfyUI 用的常冲突——这正是这一版想摆脱的耦合，所以默认就用 CPU。
+
+### 后端怎么选
+
+```
+--separator auto   （默认） 有 ONNX 权重 → MDX；否则 demucs；再否则 hpss
+--separator onnx   强制 MDX（无 torch）
+--separator demucs 强制 Demucs（要 torch）
+--separator hpss   零依赖兜底：只做谐波/打击分离，和弦与旋律会被污染
+--separator none   不分离
+```
+
+模型**不进仓库**：`deps.manifest.json` 里只记 URL、字节数、MD5，首次运行时下到 `models/uvr/`（63.7 MB）。
+下载失败不报错，分离会自动退到 demucs / hpss。
+
+### 参数为什么是这些
+
+不猜。模型的输入形状是 `[batch, 4, 3072, 256]`，`n_fft` 用已知歌词实测选定：
+
+| n_fft | 逐行命中 |
+|---|---|
+| **7680** | **85%** |
+| 6144 | 72% |
+
+### 已知限制
+
+- MDX 是 **2-stem**（人声 / 伴奏），没有单独的鼓与贝斯。结构分析的"鼓"是从**原始混音**取打击分量近似的，
+  所以 `sound_structure` 在有 ONNX 后端时对"有没有鼓"的判断不如 Demucs 精细。
+- 电平用 RMS 对齐（模型自带的 `compensate` 未知），**只影响音量，不影响转写**。
+- CPU 分离 2.3× 实时：4 分钟的歌约 90 秒。
+
+---
+
 
 ## 1.0.1 修了什么（重要：崩溃修复）
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-soundtry",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "DSH 的本地听觉插件：转写/节奏/旋律/和弦/结构六件套。依赖显式声明在 deps.manifest.json，首次运行自动安装；有 ComfyUI 就借它的 torch，省 7 GB。",
   "keywords": [
     "dsh",

@@ -110,7 +110,11 @@ export function readSpec() {
           enum: ['auto', 'vocals', 'off', 'mix'],
           description: 'Escape hatch for the voice-region gate. "auto" (default) splits the vocal stem into blocks and only sends those to the recogniser — this is what stops whisper from inventing lines over instrumental sections. If a machine crashes on that path (native heap corruption from torch+ctranslate2 coexisting), pass "off" to transcribe the whole file in one go: same text quality on clean material, but hallucination protection is lost.',
         },
-        separate: { type: 'boolean', description: SEPARATE_DESC },      },
+        separator: {
+          type: 'string',
+          enum: ['auto', 'onnx', 'demucs', 'hpss', 'none'],
+          description: 'Separation backend. "auto" (default) picks MDX-Net via onnxruntime (no torch, best on dense rap), then demucs if available, then HPSS. "onnx" forces MDX (63 MB model, downloaded on first run); "hpss" is a crude zero-dependency fallback that pollutes chords/melody.',
+        },        separate: { type: 'boolean', description: SEPARATE_DESC },      },
       required: ['input'],
       additionalProperties: false,
     },
@@ -124,7 +128,7 @@ export function readSpec() {
         args: toArgs({
           input: args.input, model: args.model, lang: args.language,
           window: args.windows, srt: args.srt, vad: args.vad, vadMode: args.vadMode,
-          prompt: args.prompt, head: args.head, separate: args.separate, lyrics: args.lyrics,
+          prompt: args.prompt, head: args.head, separate: args.separate, separator: args.separator, lyrics: args.lyrics,
         }),
         signal: exec?.signal,
       });
@@ -163,7 +167,11 @@ export function transcribeSpec() {
           enum: ['auto', 'vocals', 'off', 'mix'],
           description: 'Escape hatch for the voice-region gate. "auto" (default) splits the vocal stem into blocks and only sends those to the recogniser — this is what stops whisper from inventing lines over instrumental sections. If a machine crashes on that path (native heap corruption from torch+ctranslate2 coexisting), pass "off" to transcribe the whole file in one go: same text quality on clean material, but hallucination protection is lost.',
         },
-        separate: { type: 'boolean', description: SEPARATE_DESC },      },
+        separator: {
+          type: 'string',
+          enum: ['auto', 'onnx', 'demucs', 'hpss', 'none'],
+          description: 'Separation backend. "auto" (default) picks MDX-Net via onnxruntime (no torch, best on dense rap), then demucs if available, then HPSS. "onnx" forces MDX (63 MB model, downloaded on first run); "hpss" is a crude zero-dependency fallback that pollutes chords/melody.',
+        },        separate: { type: 'boolean', description: SEPARATE_DESC },      },
       required: ['input'],
       additionalProperties: false,
     },
@@ -177,7 +185,7 @@ export function transcribeSpec() {
         args: toArgs({
           input: args.input, start: args.start, end: args.end, lang: args.language, vadMode: args.vadMode,
           model: args.model, srt: args.srt, prompt: args.prompt, vad: args.vad,
-          head: args.head, includeCues: args.includeCues, separate: args.separate, lyrics: args.lyrics,
+          head: args.head, includeCues: args.includeCues, separate: args.separate, separator: args.separator, lyrics: args.lyrics,
         }),
         signal: exec?.signal,
       });
@@ -252,7 +260,11 @@ export function melodySpec() {
           description: 'Windows as "label:start:end", e.g. "verse:32.8:36.6". Repeatable.',
         },
         lyrics: { type: 'string', description: 'Path to a plain-text lyric file. Turns it into the recogniser prompt (which is the single biggest accuracy win on sung material) and reports per-line recall.' },
-        separate: { type: 'boolean', description: SEPARATE_DESC },      },
+        separator: {
+          type: 'string',
+          enum: ['auto', 'onnx', 'demucs', 'hpss', 'none'],
+          description: 'Separation backend. "auto" (default) picks MDX-Net via onnxruntime (no torch, best on dense rap), then demucs if available, then HPSS. "onnx" forces MDX (63 MB model, downloaded on first run); "hpss" is a crude zero-dependency fallback that pollutes chords/melody.',
+        },        separate: { type: 'boolean', description: SEPARATE_DESC },      },
       required: ['input'],
       additionalProperties: false,
     },
@@ -263,7 +275,7 @@ export function melodySpec() {
     async execute(args, exec) {
       if (!args?.input) throw new Error('input is required');
       const { report } = await runSoundtry('melody', {
-        args: toArgs({ input: args.input, window: args.windows, separate: args.separate }),
+        args: toArgs({ input: args.input, window: args.windows, separate: args.separate, separator: args.separator }),
         signal: exec?.signal,
       });
       return { text: report };
@@ -292,7 +304,11 @@ export function chordsSpec() {
       properties: {
         input: { type: 'string', description: INPUT_DESC },
         lyrics: { type: 'string', description: 'Path to a plain-text lyric file. Turns it into the recogniser prompt (which is the single biggest accuracy win on sung material) and reports per-line recall.' },
-        separate: { type: 'boolean', description: SEPARATE_DESC },      },
+        separator: {
+          type: 'string',
+          enum: ['auto', 'onnx', 'demucs', 'hpss', 'none'],
+          description: 'Separation backend. "auto" (default) picks MDX-Net via onnxruntime (no torch, best on dense rap), then demucs if available, then HPSS. "onnx" forces MDX (63 MB model, downloaded on first run); "hpss" is a crude zero-dependency fallback that pollutes chords/melody.',
+        },        separate: { type: 'boolean', description: SEPARATE_DESC },      },
       required: ['input'],
       additionalProperties: false,
     },
@@ -303,7 +319,7 @@ export function chordsSpec() {
     async execute(args, exec) {
       if (!args?.input) throw new Error('input is required');
       const { report } = await runSoundtry('chords', {
-        args: toArgs({ input: args.input, separate: args.separate }),
+        args: toArgs({ input: args.input, separate: args.separate, separator: args.separator }),
         signal: exec?.signal,
       });
       return { text: report };
@@ -334,7 +350,11 @@ export function structureSpec() {
         input: { type: 'string', description: INPUT_DESC },
         window: { type: 'number', description: 'Analysis window in seconds. Default 0.25.' },
         minLen: { type: 'number', description: 'Fragments shorter than this (seconds) are absorbed. Default 2.' },
-        separate: { type: 'boolean', description: SEPARATE_DESC },      },
+        separator: {
+          type: 'string',
+          enum: ['auto', 'onnx', 'demucs', 'hpss', 'none'],
+          description: 'Separation backend. "auto" (default) picks MDX-Net via onnxruntime (no torch, best on dense rap), then demucs if available, then HPSS. "onnx" forces MDX (63 MB model, downloaded on first run); "hpss" is a crude zero-dependency fallback that pollutes chords/melody.',
+        },        separate: { type: 'boolean', description: SEPARATE_DESC },      },
       required: ['input'],
       additionalProperties: false,
     },
@@ -347,7 +367,7 @@ export function structureSpec() {
       const { report } = await runSoundtry('structure', {
         args: toArgs({
           input: args.input, window: args.window,
-          minLen: args.minLen, separate: args.separate,
+          minLen: args.minLen, separate: args.separate, separator: args.separator,
         }),
         signal: exec?.signal,
       });

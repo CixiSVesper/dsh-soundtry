@@ -92,3 +92,18 @@ node --expose-internals "<DSH>\resources\app\lib\plugin-cli.js" desktop remove d
 ```
 
 数据不共享：1.0 用 `~/.dsh/soundtry.json`（读不到时回退旧配置），模型和缓存放在自己的目录里。
+
+---
+
+## 八、分离后端（1.0.2）
+
+| 后端 | 依赖 | 质量（已知歌词实测） | 速度（207 秒歌） |
+|---|---|---|---|
+| **mdx-onnx（默认）** | onnxruntime（约 50 MB）+ 权重 63.7 MB | **85%** | 89 s（CPU） |
+| demucs | torch（7.2 GB） | 79% | 25 s（GPU） |
+| hpss | 无 | 会污染和弦/旋律 | 极快 |
+
+权重位置：`models/uvr/Kim_Vocal_2.onnx`，由 `deps.manifest.json` 的 `assets` 段在首次运行时下载。
+下载失败不阻塞：`auto` 会依次退到 demucs、hpss。
+
+`sound_structure` 的"鼓"在 onnx 后端下是**从原始混音取打击分量**近似的，精度不如 Demucs 的四轨分离。
