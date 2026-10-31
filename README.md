@@ -10,6 +10,37 @@
 - **不可信的地方会自己说**：BPM 有 `ambiguous`/`level`/`conflict` 三态，切点双阈值同时报，和弦明说"根音可信、品质不可信"
 - **设置就在插件里**：**插件 → 已安装 → dsh-soundtry** 详情页里有「声音分析」区块，可切 CPU/GPU、分离后端、模型；显存 < 4 GB 时自动锁 CPU 并给出提示
 
+## 运行要求
+
+**只需要一个 Python 环境，不需要 ComfyUI。**
+
+| 项 | 要求 | 说明 |
+|---|---|---|
+| 操作系统 | **Windows 10/11 x64** | 路径与 PATH 分隔符目前按 Windows 写死，macOS/Linux 会失败 |
+| Python | **3.10 – 3.12** | 有就用现成的；没有再装一个 |
+| 磁盘 | **3 GB** 起 | venv 154 MB + whisper medium 1457 MB + MDX 64 MB + ffmpeg 62 MB + 缓存 |
+| 内存 | **6 GB 可用**，8 GB 推荐 | 实测 4 分钟歌「分离+转写」峰值 **4.42 GB**（随音频长度线性增长） |
+| CPU | 4 核起 | MDX 分离约 **2.3× 实时**（207 秒歌 ≈ 89 秒） |
+| 显卡 | **不需要** | ≥ 4 GB 显存才会启用；且只加速 whisper / demucs，MDX 分离固定 CPU |
+| ffmpeg | 需要一份 | 首次运行会从 `PATH`、邻近插件或 `SOUNDTRY_FFMPEG` 复制进 `vendor/` |
+| Node | ≥ 20 | DSH 宿主侧要求 |
+
+### Python 从哪来：两条路
+
+```
+告诉 DSH：用我已有的 python  →  borrow 模式（默认）→ venv 只装 4 个包，约 160 MB
+告诉 DSH：没有 python        →  standalone 模式 → 整套进 venv，约 7 GB
+```
+
+**给 agent 的原话：**
+
+> 「dsh-soundtry 需要一个 Python 3.10–3.12。**先找机器上已有的**（比如 ComfyUI 的 `python\python.exe`），把路径写进 `~/.dsh/soundtry.json` 的 `python` 字段，用 borrow 模式；**如果机器上根本没有 Python，就装一个 3.12**，让插件自己建 venv 装依赖。」
+
+插件自己也会找：`SOUNDTRY_PYTHON` → 配置 `python` → 配置 `comfyui` → 自动扫 `D:\ComfyUI\*`、`C:\ComfyUI\*` → `PATH` 上的 `python`。
+
+> ⚠️ **一个真实的坑**：borrow 模式会 `pip install demucs`。如果那个 Python **没有 torch**，pip 会把 torch 一起拉下来（约 2.5 GB）。只用 MDX 分离的话，装依赖时可以跳过 demucs，或直接用 `separator: "onnx"`。
+
+
 ## 设置项（在插件详情页里）
 
 打开 **插件 → 已安装 → dsh-soundtry**，详情页底部有「声音分析」：
@@ -141,44 +172,6 @@ $env:SOUNDTRY_MODEL='large-v3'    # 然后删掉 runtime/ready.json 让它重装
 ```powershell
 node src/deps.js
 ```
-
----
-
-## ⚠️ 省空间：让 DSH 借用一个已有的 Python（可选）
-
-> **1.0.2 起，默认路径（MDX 分离 + whisper）不需要 torch。** 但 whisper 的 ctranslate2 与
-> numpy/librosa/scipy 仍然要一个 Python 环境；机器上装了 ComfyUI（或任何带 torch 的 Python）时，
-> 让 agent 指过去最省——插件 venv 只装 4 个包，约 110 MB；否则走 standalone，约 7 GB。
-
-插件**默认会自动去找**（`D:\ComfyUI\*\python\python.exe` 这类常见路径），找到就用 `borrow` 模式：
-
-| 模式 | 装什么 | 磁盘增量 | 适用 |
-|---|---|---|---|
-| **borrow**（默认） | 只装 `faster-whisper` / `demucs` / `torchcrepe` + 强制装 `onnxruntime`；`torch`、`torchaudio`、`numpy`、`librosa`、`scipy` 沿用那个 Python 的 | **约 160 MB** + 模型 1457 MB + 分离权重 64 MB | 有 ComfyUI / 有带 torch 的 Python |
-| **standalone**（兜底） | 全套都装进插件 venv，包括 torch（CUDA 轮子约 2.5 GB 下载） | 约 7 GB | 机器上没有任何带 torch 的 Python |
-
-> `onnxruntime` 是**强制装进插件 venv** 的（`forceInstall` + `--ignore-installed`）：
-> 否则 pip 会认为借用环境里已有而跳过，删掉那个环境后分离就废了。
-
-**给 agent 的原话可以这么说：**
-
-> "把 dsh-soundtry 的依赖源指到我 ComfyUI 的 python 上（`{"python": "D:\\ComfyUI\\...\\python\\python.exe"}` 写到 `~/.dsh/soundtry.json`），用 borrow 模式，别让它自己下 torch。"
-
-
-手工指定也可以，三种写法优先级从高到低：
-
-```powershell
-# 1. 环境变量
-$env:SOUNDTRY_PYTHON='D:\ComfyUI\ComfyUI-aki-v2\python\python.exe'
-
-# 2. 配置文件 ~/.dsh/soundtry.json
-# {"python": "D:\\ComfyUI\\ComfyUI-aki-v2\\python\\python.exe", "deps": "borrow"}
-
-# 3. 只给 ComfyUI 根目录，让它自己找 python
-# {"comfyui": "D:\\ComfyUI\\ComfyUI-aki-v2", "deps": "borrow"}
-```
-
-`standalone` 模式没有被本机实测过（这台机器有 ComfyUI，走的是 borrow），只按 PyTorch 官方 cu129 索引写了安装路径。
 
 ---
 

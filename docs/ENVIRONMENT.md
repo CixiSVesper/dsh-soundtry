@@ -9,7 +9,7 @@
 
 | | **borrow**（默认） | standalone |
 |---|---|---|
-| 依赖源 | 机器上已有的、带 torch 的 Python（通常是 ComfyUI 自带的那个） | 任意 Python 3.10–3.12 |
+| 依赖源 | 机器上已有的 Python 3.10–3.12（有 numpy/librosa 更好；ComfyUI 那种最省事） | 任意 Python 3.10–3.12 |
 | venv 建法 | `python -m venv --system-site-packages` | `python -m venv` |
 | 装进 venv 的 | `faster-whisper` `demucs` `torchcrepe` | 上面三个 + `torch` `torchaudio` `numpy` `scipy` `librosa` `soundfile` `onnxruntime` |
 | 沿用依赖源的 | `torch` `torchaudio` `numpy` `scipy` `librosa` `soundfile` `onnxruntime`（以及通常在的 `ctranslate2` `av`） | 无 |
