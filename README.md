@@ -4,7 +4,7 @@
 
 和 `dsh-video-vision`（看得见画面）配套使用：那个负责"是什么样"，这个负责"说了什么、什么节奏、旋律往哪走"。
 
-## 四个工具
+## 六个工具
 
 | 工具 | 干什么 | 什么时候用 |
 |---|---|---|
@@ -13,6 +13,7 @@
 | `sound_rhythm` | BPM（网格回套+相位连续性+偶奇拍判据）、鼓组能量、切点踩拍率 | 判断"是不是跟着音乐剪的""为什么这段更急" |
 | `sound_melody` | **人声轨**上的音域、调性、最常出现的音、指定窗口的音高轮廓 | 判断副歌有没有升、句子跳了几度 |
 | `sound_chords` | 缓和过的和弦时间轴（拍点级），含各和弦持续时长 | 判断四和弦循环、副歌换不换和弦、预副歌在哪抬起来 |
+| `sound_structure` | 段落边界（前奏/主歌/副歌/间奏/断口/尾奏）+ 人声进、鼓进、峰值的精确时刻 | 要按段落切片、找高潮在哪、对比两首歌的结构 |
 
 典型调用：
 
@@ -22,6 +23,24 @@ sound_chords    input="D:/歌.flac"
 sound_rhythm    input="D:/歌.mp4" video="D:/歌.mp4"
 sound_transcribe input="D:/课.mp4" start=600 end=720 srt="D:/课_10min.srt"
 sound_melody    input="D:/歌.mp4" windows=["副歌:78:82","主歌:33:37"]
+sound_structure input="D:/歌.flac"
+```
+
+## 安装
+
+本仓库**只含源码**。venv（108 MB）、whisper 权重（2.9 GB）、demucs 权重（80 MB）和 ffmpeg（61 MB）都不在仓库里，需要本地生成：
+
+```powershell
+# 前提：一个装了 torch / torchaudio / librosa 的 Python（ComfyUI 自带的那个就行）
+.\scripts\setup.ps1 -Python "D:\ComfyUI\ComfyUI-aki-v2\python\python.exe"
+```
+
+脚本会：建 venv（`--system-site-packages`，让 torch 继续从那个 Python 借，不复制 7 GB）→ 装 `faster-whisper`/`demucs`/`torchcrepe` → 从 ModelScope 下 whisper large-v3 → 把 ffmpeg 复制进 `vendor/ffmpeg` → 跑 `doctor` 自检。
+
+装好之后用 DSH 装插件：
+
+```powershell
+node --expose-internals "D:\Program Files\DSH\DSH NEXT\resources\app\lib\plugin-cli.js" desktop install <这个目录>
 ```
 
 ## 怎么做到"不编词"的
