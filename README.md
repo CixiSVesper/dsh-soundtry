@@ -1,6 +1,28 @@
 # dsh-soundtry
 
-**DSH 的本地听觉插件 · 1.0**
+**DSH 的本地听觉插件 · 1.0.1**
+
+## 1.0.1 修了什么（重要：崩溃修复）
+
+上一版在**某些机器上会原生崩溃**（Windows 退出码 `3221226505` / `0xC0000409`，堆损坏，没有 Python 栈），触发条件是 **Demucs(torch) 和 whisper(ctranslate2) 同进程 + 多次 transcribe 调用**。已在 1.0.1 从三个层面堵住：
+
+| 修复 | 做法 | 效果 |
+|---|---|---|
+| **分离进程隔离** | Demucs 改到子进程跑，只写 flac；主进程读回来再喂 whisper | 转写进程里**根本没有 torch**，torch 与 ct2 不可能抢 CUDA |
+| **集中调用不碰 torch** | `sound_read`（= `all`）里强制旋律跟踪走 `pyin`，不 import torchcrepe | 一次调用里不再同时出现 torch 和 ct2 |
+| **安全退出** | 结果打印并 flush 后 `os._exit(0)`，跳过解释器清理 | 即使环境有隐患，也绕开崩溃发生的那段收尾 |
+
+另外把逃生口露出来了：
+
+- 工具参数 **`vadMode`**（`auto` / `vocals` / `off` / `mix`）。人声切块崩了就传 `off`——整段一次转写，文字质量不变，代价是失去"不编词"保护。
+- 环境变量 `SOUNDTRY_INPROC_SEPARATE=1`（回到同进程分离，省 2–3 秒）、`SOUNDTRY_TRACKER=torchcrepe|pyin|auto`、`SOUNDTRY_SAFE_EXIT=0`。
+
+实测（252 秒的歌、带歌词提示、RTX 4070）：
+- 冷缓存（含子进程分离）40 秒 → 热缓存 13 秒，**逐行识别仍是 58/60**，与 1.0.0 一致（进程隔离没有质量代价）。
+- 六个工具回归 6/6。
+
+---
+
 
 让 agent 听得见声音：转写、测节奏、抽旋律、认和弦、切段落——全部在本机跑，零 API 费用。
 

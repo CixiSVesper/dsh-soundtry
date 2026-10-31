@@ -133,21 +133,71 @@ def looks_hallucinated(text: str) -> bool:
 _stem_cache = {}
 
 
-def stems_for(path: str, use_gpu: bool = True):
-    """用 Demucs 把音轨拆成 drums/bass/other/vocals，缓存到 <插件>/cache/stems/<size>-<mtime>/。
+def _stems_dir(path: str):
+    st = os.stat(path)
+    tag = f"{st.st_size}-{int(st.st_mtime)}"
+    return CACHE_DIR / "stems" / tag
 
-    返回 {名字: 单声道 float32 16k numpy} 或 None（没装 demucs 就安静地返回 None）。
-    为什么值得这一步：HPSS 只分打击/谐波，人声和贝斯都在"谐波"里，
-    于是 pyin 永远锁到贝斯；拆开之后旋律线才真的是人声。
+
+def _read_stems(outdir):
+    """只读缓存，不碰 torch。"""
+    got = {}
+    for n in ("vocals", "bass", "other", "drums"):
+        p = outdir / f"{n}.flac"
+        if not p.is_file():
+            return None
+        y, _ = _sf_read_16k(str(p))
+        got[n] = y
+    return got
+
+
+def stems_for(path: str, use_gpu: bool = True):
+    """Demucs 分轨，缓存到 <插件>/cache/stems/<size>-<mtime>/。
+
+    **进程隔离**：Demucs（torch）默认在子进程里跑，只把 flac 写到磁盘；主进程再读回来。
+    原因是实测到的一类原生崩溃——torch 和 ctranslate2 同进程时，在某些机器上会在
+    解释器退出阶段堆损坏（Windows 0xC0000409），而 whisper 和 demucs 恰好都要用。
+    子进程隔离之后，转写进程里根本没有 torch，这类崩溃就不可能发生。
+
+    想退回同进程（省一次 python 启动，约 2–3 秒）：设 SOUNDTRY_INPROC_SEPARATE=1。
     """
     key = (path, use_gpu)
     if key in _stem_cache:
         return _stem_cache[key]
 
-    st = os.stat(path)
-    tag = f"{st.st_size}-{int(st.st_mtime)}"
-    outdir = CACHE_DIR / "stems" / tag
+    outdir = _stems_dir(path)
 
+    # 缓存命中：只读文件，此路径完全不 import torch
+    got = _read_stems(outdir)
+    if got:
+        _stem_cache[key] = got
+        return got
+
+    # 未命中：优先让子进程做分离
+    if os.environ.get("SOUNDTRY_INPROC_SEPARATE") != "1":
+        try:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "stems", path]
+            if not use_gpu:
+                cmd.append("--no-gpu")
+            r = subprocess.run(cmd, capture_output=True, timeout=1800)
+            if r.returncode == 0:
+                got = _read_stems(outdir)
+                if got:
+                    _stem_cache[key] = got
+                    return got
+            else:
+                # 子进程输出按 UTF-8 解、坏字节替换掉：Windows 上管道默认走 GBK，
+                # 中文日志会直接抛 UnicodeDecodeError，把"分离成功"误判成失败。
+                raw = (r.stderr or b"") + (r.stdout or b"")
+                tail = raw.decode("utf-8", "replace").strip().splitlines()[-3:]
+                print("# （子进程分离失败，改在本进程内做：" + " | ".join(tail) + "）")
+        except Exception as e:
+            print(f"# （子进程分离异常，改在本进程内做：{type(e).__name__}）")
+
+    return _stems_inproc(path, outdir, key, use_gpu)
+
+
+def _stems_inproc(path, outdir, key, use_gpu):
     try:
         import torch
         from demucs.api import Separator
@@ -155,17 +205,7 @@ def stems_for(path: str, use_gpu: bool = True):
         _stem_cache[key] = None
         return None
 
-    # 缓存命中：直接读
-    cached = {n: outdir / f"{n}.flac" for n in ("vocals", "bass", "other", "drums")}
-    if all(p.is_file() for p in cached.values()):
-        got = {}
-        for n, p in cached.items():
-            y, _ = _sf_read_16k(str(p))
-            got[n] = y
-        _stem_cache[key] = got
-        return got
-
-    device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
+    device = pick_device(use_gpu, need_gb=4.0)
     try:
         import soundfile as sf
         sep = Separator(model="htdemucs", device=device, progress=False)
@@ -199,6 +239,53 @@ def stems_for(path: str, use_gpu: bool = True):
         print(f"# （分离失败：{type(e).__name__}: {e}；退回混合信号）")
         _stem_cache[key] = None
         return None
+
+
+def cmd_stems(args):
+    """只做分离、只写 flac —— 给 stems_for 的子进程用。"""
+    path = args.input
+    outdir = _stems_dir(path)
+    outdir.mkdir(parents=True, exist_ok=True)
+    got = _stems_inproc(path, outdir, (path, bool(getattr(args, "gpu", True))), bool(getattr(args, "gpu", True)))
+    if got is None:
+        print("# 分离失败")
+        return {"ok": False, "dir": str(outdir)}
+    print(f"# 分离完成：{outdir}")
+    for n in got:
+        print(f"  {n}: {len(got[n]) / 16000:.1f}s")
+    return {"ok": True, "dir": str(outdir), "stems": list(got)}
+
+
+def nvidia_vram_gb():
+    """查第一块 NVIDIA 显卡的显存（GB）。查不到返回 None —— 不假装知道。"""
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        first = (r.stdout or "").strip().splitlines()[0].strip()
+        return round(float(first) / 1024.0, 1)
+    except Exception:
+        return None
+
+
+def pick_device(want_gpu: bool, need_gb: float = 4.0) -> str:
+    """有 GPU 且显存 > need_gb 才用 cuda，否则 cpu。"""
+    if not want_gpu:
+        return "cpu"
+    vram = nvidia_vram_gb()
+    if vram is None:
+        return "cpu"
+    if vram <= need_gb:
+        print(f"# （显存 {vram} GB ≤ {need_gb} GB，改用 CPU）")
+        return "cpu"
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 
 def _resample_to_16k(y, sr):
@@ -897,13 +984,20 @@ def cmd_melody(args):
     if source.startswith("混合"):
         y = librosa.effects.hpss(y, margin=(1.0, 5.0))[0]
 
+    # 跟踪器选择：默认自动 —— 有 torchcrepe 就用它（更准），没有就用 pyin（纯 librosa）。
+    # 但 torchcrepe 会 import torch，而 torch 和 whisper 的 ctranslate2 同进程在某些机器上
+    # 会崩（0xC0000409 堆损坏）。所以集中调用（sound_read = all）默认强制 pyin，
+    # 单跑 melody 才用 torchcrepe。想改：SOUNDTRY_TRACKER=pyin|torchcrepe|auto。
+    want = (os.environ.get("SOUNDTRY_TRACKER") or "auto").strip().lower()
     tracker = "pyin"
-    f0 = None
-    try:
-        import torchcrepe  # noqa: F401
-        tracker = "torchcrepe"
-    except Exception:
-        pass
+    if want != "pyin":
+        try:
+            import torchcrepe  # noqa: F401
+            tracker = "torchcrepe"
+        except Exception:
+            pass
+    if want == "torchcrepe" and tracker != "torchcrepe":
+        print("# （要求用 torchcrepe 但导入失败，退回 pyin）")
 
     if tracker == "pyin":
         f0, _, _ = librosa.pyin(y, fmin=librosa.note_to_hz("E2"),
@@ -1153,6 +1247,10 @@ def cmd_all(args):
         return out
 
     sep = getattr(args, "separate", True)
+    # sound_read 一个进程里要同时跑 whisper（ctranslate2）和旋律跟踪（torchcrepe/torch），
+    # 这正是会触发 0xC0000409 的组合。默认把跟踪器钉死在 pyin，让这个进程完全碰不到 torch；
+    # 想要 torchcrepe 的精度就单独调 sound_melody，或显式设 SOUNDTRY_TRACKER=torchcrepe。
+    os.environ.setdefault("SOUNDTRY_TRACKER", "pyin")
     print("=" * 60)
     tr = cmd_transcribe(argparse.Namespace(
         input=args.input, model=args.model, device=args.device, compute=args.compute,
@@ -1300,6 +1398,12 @@ def main():
     p.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True)
     p.set_defaults(func=cmd_structure)
 
+    # 内部命令：只做分离、只写 flac，供 stems_for 的子进程调用。
+    p = sub.add_parser("stems")
+    p.add_argument("input")
+    p.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=True)
+    p.set_defaults(func=cmd_stems)
+
     p = sub.add_parser("all"); common(p)
     p.add_argument("--window", action="append", default=[])
     p.set_defaults(func=cmd_all)
@@ -1327,6 +1431,14 @@ def main():
 
     result = args.func(args)
     print(JSON_MARK + json.dumps(result, ensure_ascii=False))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # 已知问题：某些机器上 torch 的 CUDA 清理会和 ctranslate2 打架，崩溃点在
+    # "结果已打印、解释器退出时"（Windows 上是 0xC0000409 堆损坏，没有 Python 栈）。
+    # 结果已经写进 stdout 了，这里直接跳过后面的 atexit/GC，等于绕开崩溃现场。
+    # 想保留正常退出：设 SOUNDTRY_SAFE_EXIT=0。
+    if os.environ.get("SOUNDTRY_SAFE_EXIT", "1") == "1":
+        os._exit(0)
     return 0
 
 

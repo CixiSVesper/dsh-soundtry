@@ -60,7 +60,8 @@ function manifestKey(manifest, model) {
     standalone: manifest.modes?.standalone?.pip ?? [],
   };
   const files = manifest.models?.[model]?.files ?? [];
-  return JSON.stringify({ v: manifest.version, deps, files, model });
+  // 不含 manifest.version：改版本号不该触发重装，只有依赖清单/模型变了才重装。
+  return JSON.stringify({ deps, files, model });
 }
 
 function readMarker() {
