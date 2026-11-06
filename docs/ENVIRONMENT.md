@@ -1,5 +1,10 @@
 # 环境与依赖
 
+> **1.0.3 校正**：默认模式是 **selfcontained**（自带隔离 venv，不借 ComfyUI）；
+> `borrow` / `standalone` 仍然保留，但**默认都不再安装 demucs / torchcrepe**，
+> torch 只有设 `SOUNDTRY_WITH_DEMUCS=1` 时才会装。
+> 配置文件已改名为 `~/.dsh/cixisound.json`（旧名仍可读）。下表是历史对照，请以上述为准。
+
 1.0 的原则：**依赖是声明出来的，不是猜出来的。** 所有依赖写在根目录
 [`deps.manifest.json`](../deps.manifest.json) 里，插件在第一次调用工具时按它把环境备齐。
 
@@ -7,16 +12,16 @@
 
 ## 一、两种模式
 
-| | **borrow**（默认） | standalone |
+| | borrow | standalone（等价 selfcontained） |
 |---|---|---|
 | 依赖源 | 机器上已有的 Python 3.10–3.12（有 numpy/librosa 更好；ComfyUI 那种最省事） | 任意 Python 3.10–3.12 |
-| venv 建法 | `python -m venv --system-site-packages` | `python -m venv` |
-| 装进 venv 的 | `faster-whisper` `demucs` `torchcrepe` | 上面三个 + `torch` `torchaudio` `numpy` `scipy` `librosa` `soundfile` `onnxruntime` |
+| venv 建法 | `python -m venv --system-site-packages` | `python -m venv`（**默认**，隔离） |
+| 装进 venv 的 | `faster-whisper`（demucs/torchcrepe 需 `SOUNDTRY_WITH_DEMUCS=1`） | `faster-whisper` + `onnxruntime` + `numpy` `scipy` `librosa` `soundfile` |
 | 沿用依赖源的 | `torch` `torchaudio` `numpy` `scipy` `librosa` `soundfile` `onnxruntime`（以及通常在的 `ctranslate2` `av`） | 无 |
 | 磁盘增量 | **约 110 MB** + 模型 | 约 7 GB + 模型 |
 | 实测 | 本机跑通（ComfyUI 的 torch 2.8.0+cu129） | **未实测**，只按 PyTorch 官方索引写了路径 |
 
-模式由 `SOUNDTRY_DEPS` / 配置项 `deps` 决定；不写就看依赖源有没有 torch 自动选。
+模式由 `SOUNDTRY_DEPS` / 配置项 `deps` 决定；**不写就是 selfcontained**（不再按有没有 torch 自动选）。
 
 ---
 
@@ -26,9 +31,9 @@
 |---|---|---|---|
 | 代码 | `src/` `python/` `docs/` `scripts/` | < 300 KB | 仓库自带 |
 | 依赖声明 | `deps.manifest.json` | 2 KB | 仓库自带 |
-| venv | `runtime/venv/` | 约 110 MB（borrow） | 首次运行自动建 |
+| venv | `runtime/venv/` | 约 543 MB（selfcontained） | 首次运行自动建 |
 | whisper medium | `models/medium/` | 1457 MB | 首次运行自动下（ModelScope） |
-| Demucs htdemucs | `models/torch/` | 80 MB | 首次分离时 torch.hub 自动下 |
+| Demucs htdemucs（可选） | `models/torch/` | 80 MB | 只在 `SOUNDTRY_WITH_DEMUCS=1` 时用 |
 | ffmpeg | `vendor/ffmpeg/ffmpeg.exe` | 61.5 MB | 首次运行从机器上已有的那份复制 |
 | 分离缓存 | `cache/stems/` | 每首约 30 MB | 可随时删 |
 | 就绪标记 | `runtime/ready.json` | < 1 KB | 装完自动写；删了即重装 |
@@ -38,8 +43,8 @@
 ## 三、依赖源怎么找（优先级）
 
 1. 环境变量 `SOUNDTRY_PYTHON`
-2. `~/.dsh/soundtry.json` 的 `python`
-3. `~/.dsh/soundtry.json` 的 `comfyui`（拼 `python/python.exe`）
+2. `~/.dsh/cixisound.json` 的 `python`
+3. `~/.dsh/cixisound.json` 的 `comfyui`（拼 `python/python.exe`）
 4. 自动扫描 `D:\ComfyUI\*`、`C:\ComfyUI\*`、`E:\ComfyUI\*` 下的 `python/python.exe`、`python_embeded/python.exe`
 5. PATH 上的 `python` / `python3`
 
@@ -91,7 +96,7 @@ borrow 模式下，子进程的 `PATH` 前面会插上依赖源的 `Lib/site-pac
 node --expose-internals "<DSH>\resources\app\lib\plugin-cli.js" desktop remove dsh-soundtry
 ```
 
-数据不共享：1.0 用 `~/.dsh/soundtry.json`（读不到时回退旧配置），模型和缓存放在自己的目录里。
+数据不共享：1.0 用 `~/.dsh/cixisound.json`（读不到时依次回退 `soundtry.json`、`soundambi.json`），模型和缓存放在自己的目录里。
 
 ---
 

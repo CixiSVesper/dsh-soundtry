@@ -31,7 +31,7 @@
 |---|---|---|
 | 操作系统 | **Windows 10/11 x64** | 路径与 PATH 分隔符目前按 Windows 写死 |
 | Python | **3.10 – 3.12**（只当解释器） | 3.13 上 `ctranslate2` 没有轮子，会去源码编译，别用 |
-| 磁盘 | **约 2.5 GB** | venv 607 MB + whisper medium 1457 MB + MDX 64 MB + ffmpeg 62 MB |
+| 磁盘 | **约 2.4 GB** | venv 543 MB + whisper medium 1457 MB + MDX 64 MB + ffmpeg 62 MB |
 | 内存 | **6 GB 可用**，8 GB 推荐 | 实测 4 分钟歌「分离+转写」峰值 4.42 GB |
 | CPU | 4 核起 | MDX 分离约 2.3× 实时 |
 | 显卡 | **不需要** | 见下面「关于 GPU」 |
@@ -57,15 +57,15 @@ librosa 1.0.0 + numpy 2.5.4 + scipy 1.18.1 + soundfile 0.14.0  ← 节奏/旋律
 runtime\venv\Scripts\python.exe -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
-## 1.1.6：torch / torchaudio 彻底移出默认依赖
+### 1.0.3 · 第六阶段：torch / torchaudio 彻底移出默认依赖
 
 有用户反馈"这个插件依赖 Python venv + torchaudio cu129"。核实结论：
 
 | 版本 | 会不会要求 torchaudio |
 |---|---|
 | **线上 1.0.2**（GitHub v1.0.2） | ✅ **会**。它的 `borrow` 模式默认装 `demucs`，而 demucs 拉 `torch` + `torchaudio`，从 ComfyUI 借到的正是 `2.8.0+cu129`，doctor 里也直接显示这一行 |
-| **1.1.x 默认（selfcontained）** | ❌ 不会。pip 清单里根本没有 torch，实测 `torch / torchaudio / torchcrepe / demucs` 全部 NOT installed |
-| 1.1.x 的 borrow / standalone | 原先仍会装 demucs → 同样拖 torch；**1.1.6 起默认不再装** |
+| **1.0.3 默认（selfcontained）** | ❌ 不会。pip 清单里根本没有 torch，实测 `torch / torchaudio / torchcrepe / demucs` 全部 NOT installed |
+| 1.0.3 的 borrow / standalone | 原先仍会装 demucs → 同样拖 torch；**1.0.3 起默认不再装** |
 
 ### 改了什么
 
@@ -80,7 +80,7 @@ runtime\venv\Scripts\python.exe -m pip install nvidia-cublas-cu12 nvidia-cudnn-c
 MDX 是默认且实测更好的那条（快嘴说唱逐行 85% vs Demucs 79%），所以影响很小；
 想用 Demucs 的用户显式开启即可。
 
-## 1.1.5：建"调内和弦库"+ 加权余弦打分 + 按调筛选（品质专用）
+### 1.0.3 · 第五阶段：建"调内和弦库"+ 加权余弦打分 + 按调筛选（品质专用）
 
 ### 库是什么（固定表，不是每首歌新建）
 
@@ -125,7 +125,7 @@ MDX 是默认且实测更好的那条（快嘴说唱逐行 85% vs Demucs 79%）�
 --key G#m / C / F#major    强制调性（定调错时才用；默认全自动）
 ```
 
-## 1.1.4：四项优化（按"先测量 → 再改 → 用实测验收"做的）
+### 1.0.3 · 第四阶段：四项优化（按"先测量 → 再改 → 用实测验收"做的）
 
 ### ① melody 八度纠正：从 4 个八度的假音域修到 1.5–3 个八度
 
@@ -183,7 +183,7 @@ OLK 报出 **E2–C6**（女声流行不可能）。
 **实测不划算**：三次测试两次"采纳 0 块"却多花约 3 分钟（空山野马整体跌到 0.5x）。
 所以默认关闭，需要时 `--retry-low-coverage` 或 `SOUNDTRY_RETRY=1`。
 
-## 1.1.3：裁掉 17 个未使用的包（省 66 MB）+ CPU 默认 int8
+### 1.0.3 · 第三阶段：裁掉 17 个未使用的包（省 66 MB）+ CPU 默认 int8
 
 用「运行时导入拦截」实测（拦了再跑，不是看 import 语句）：
 17 个包在 all / rhythm / transcribe 三条路径上全都不被加载，已卸载。
@@ -200,14 +200,14 @@ click(0.9)、
 equests(0.5)、httpcore2(0.6)、idna(0.6)、latbuffers(0.2)、
 h11(0.2)、	hreadpoolctl(0.2)、certifi(0.2)。
 
-**保留 pip / 	ruststore**（11 MB）：安装依赖那一步要用，删了以后装不了包。
+**保留 pip / truststore**（11 MB）：安装依赖那一步要用，删了以后装不了包。
 
 另修一处性能问题：--compute 默认是 loat16，在 CPU 上慢一个数量级。
 现在设备落在 CPU 时自动用 **int8**（实测 30 秒片段：float16 21.9s → int8 16.9s）。
 
-## 1.1.2：强拍默认值修正（WB 的证据推翻了我的判据）
+### 1.0.3 · 第二阶段：强拍默认值修正（WB 的证据推翻了我的判据）
 
-1.1.1 用「四个相位的底鼓平均幅值」选第 1 拍，在 One Last Kiss 上选中 #1，而正确是 #3 —— 差半小节。
+第一阶段 用「四个相位的底鼓平均幅值」选第 1 拍，在 One Last Kiss 上选中 #1，而正确是 #3 —— 差半小节。
 
 WB 给的反证很干净：37.849s 那一下幅值 281.8，前 2.5 秒只有 0.2，是 **200 倍跳变**。
 按绝对响度，全场最响的 10 下里有 6 下落在 #1；按**相对前 2.5 秒的跳变**，前 6 名里 5 个落在 #3。
@@ -227,7 +227,7 @@ WB 独立拟合 37.861s（差 3.4ms），手动 --downbeat 3 给 37.8576s（完�
 
 判据弱的时候（跳变票数 <2）仍退回幅值，并保留「强拍归属不确定」的警告与 --downbeat 覆盖。
 
-## 1.1.1：周期与相位不再被帧格钉住（WB 指出的三处，已修）
+### 1.0.3 · 第一阶段：周期与相位不再被帧格钉住（WB 指出的三处，已修）
 
 之前这套代码有一个结构性毛病：**在 23.22ms 的帧格上估计周期**。
 `0.53406s` 恰好是 23 帧，真值 `23.071` 帧永远取不到——每拍差 1.65ms，
@@ -261,12 +261,12 @@ WB 独立拟合 37.861s（差 3.4ms），手动 --downbeat 3 给 37.8576s（完�
 - **"这里该停一秒"**。算法只报"鼓消失一小节又回来"的候选（判据用打击分量，不用总能量），
   决策必须戴耳机。
 
-## 1.1.0：自带隔离环境，不再依赖 ComfyUI
+### 1.0.3 · 起步：自带隔离环境，不再依赖 ComfyUI
 
 1.0.x 的「borrow 模式」靠 `--system-site-packages` 借 ComfyUI 的 Python 包——省空间，但
-ComfyUI 一删插件就废，机器上没有 torch 也跑不起来。1.1.0 改成 **selfcontained**：
+ComfyUI 一删插件就废，机器上没有 torch 也跑不起来。1.0.3 改成 **selfcontained**：
 
-- venv 用 `--system-site-packages` **关掉**，依赖自己装（607 MB），实测看不到系统的 numpy/torch
+- venv 用 `--system-site-packages` **关掉**，依赖自己装（543 MB），实测看不到系统的 numpy/torch
 - 分离模型（`models/uvr/Kim_Vocal_2.onnx`，63.7 MB）下到插件里，MD5 校验过
 - 加了三处**诚实性修复**：转写 GPU 不可用时自动回退并明说；`demucs/torchcrepe/torch`
   在 doctor 里标成「可选」而不是「失败」（14/14）；报告里的分离后端不再写死成 Demucs
@@ -283,7 +283,7 @@ ComfyUI 一删插件就废，机器上没有 torch 也跑不起来。1.1.0 改�
 | 分离后端 | 自动 / MDX-Net ONNX / Demucs / HPSS | 自动的降级顺序：ONNX → Demucs → HPSS |
 | 转写模型 | medium / large-v3 | large-v3 需另下 1.5 GB |
 
-改动写入 `~/.dsh/soundtry.json`，**保存后下一次工具调用即生效，不用重启**。读-改-写，只动这三个键，手写的 `python` / `comfyui` 不会被抹掉。
+改动写入 `~/.dsh/cixisound.json`，**保存后下一次工具调用即生效，不用重启**。读-改-写，只动这三个键，手写的 `python` / `comfyui` 不会被抹掉。
 
 被降级时，工具输出顶部会多一行 `⚠ …`，agent 也能看到，不会误以为在 GPU 上跑。
 
@@ -486,7 +486,7 @@ JSON 里也能查：`"gate": "on" \| "off"`，以及 `"gate_reason"`。
 
 ## 配置
 
-配置文件 `~/.dsh/soundtry.json`（找不到时回退到旧版的 `~/.dsh/soundtry.json`）：
+配置文件 `~/.dsh/cixisound.json`（找不到时依次回退到 `soundtry.json`、`soundambi.json`）：
 
 ```json
 {
