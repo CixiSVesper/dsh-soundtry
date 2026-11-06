@@ -1,5 +1,5 @@
 /**
- * deps.js — DSH-SoundTry 1.0 的依赖层：**声明 → 检测 → 自己装**。
+ * deps.js — DSH-CixiSound 1.0 的依赖层：**声明 → 检测 → 自己装**。
  *
  * 和旧版的区别：旧版"假装 torch 是借来的"，靠 venv 的 --system-site-packages 隐式生效，
  * 文档里还得写清哪些是自带的。1.0 把这些显式列进 deps.manifest.json，并在第一次运行时
@@ -37,15 +37,20 @@ export function homeDir(env = process.env) {
   return env.DSH_HOME?.trim() || join(homedir(), '.dsh');
 }
 
-/** 配置文件：优先 ~/.dsh/soundtry.json；兼容早期写成 soundtry-v1.json 的文件。 */
+/** 配置文件：优先 ~/.dsh/cixisound.json；兼容 soundtry.json / soundtry-v1.json。 */
 export function loadConfig(env = process.env) {
   const out = { python: '', comfyui: '', ffmpeg: '', device: '', compute: '', prompt: '', deps: '', model: '', extraPath: [] };
-  for (const name of ['soundtry.json', 'soundtry-v1.json']) {
+  for (const name of ['cixisound.json', 'soundtry.json', 'soundtry-v1.json']) {
+    const p = join(homeDir(env), name);
+    if (!fs.existsSync(p)) continue;
     try {
-      const raw = JSON.parse(fs.readFileSync(join(homeDir(env), name), 'utf8'));
+      // 剥 BOM：记事本存 UTF-8 with BOM 时 JSON.parse 会报 Unexpected token
+      const raw = JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
       for (const k of Object.keys(out)) if (raw?.[k] !== undefined) out[k] = raw[k];
       break;
-    } catch { /* 没有就跳过 */ }
+    } catch (e) {
+      console.warn(`[dsh-cixisound] 配置解析失败，已忽略：${p}（${e && e.message}）`);
+    }
   }
   return out;
 }
@@ -161,11 +166,13 @@ export function detectBasePython(env = process.env, cfg = loadConfig(env)) {
 
 /** 建 venv。borrow 模式必须带 --system-site-packages，否则借不到 torch。 */
 async function createVenv(base, mode, log) {
+  const prev = readMarker()?.mode;
   if (fs.existsSync(VENV_PY)) {
     const probe = await probePython(VENV_PY);
     if (probe) {
-      // 已有 venv：只校验模式和它能看到的 torch
-      if (mode === 'borrow' && !probe.hasTorch) {
+      if (prev && prev !== mode) {
+        log(`[deps] 模式从 ${prev} 改为 ${mode}，重建 venv`);
+      } else if (mode === 'borrow' && !probe.hasTorch) {
         log('[deps] 现有 venv 看不到 torch，重建');
       } else {
         log('[deps] 复用现有 venv');
@@ -275,7 +282,7 @@ async function ensureFfmpeg(env, cfg, log) {
     env.DSH_FFMPEG_PATH,
     env.SOUNDTRY_FFMPEG,
     cfg.ffmpeg,
-    join(PLUGIN_ROOT, '..', 'dsh-soundtry', 'vendor', 'ffmpeg', 'ffmpeg.exe'),
+    join(PLUGIN_ROOT, '..', 'dsh-cixisound', 'vendor', 'ffmpeg', 'ffmpeg.exe'),
     join(PLUGIN_ROOT, '..', 'dsh-video-vision', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe'),
   ].filter(Boolean);
   for (const c of cands) {
@@ -323,15 +330,16 @@ export async function ensureReady({ env = process.env, log = () => {}, signal, f
       '找不到可用的 Python 作为依赖源。按优先级任选一条：',
       '  1. 环境变量 SOUNDTRY_PYTHON=<python.exe>',
       `  2. ${join(homeDir(env), 'soundtry.json')}：{"python":"C:\\\\...\\\\python.exe"}`,
-      '  3. 装一个 Python 3.10–3.12 后重试',
+      '  3. 装一个 Python 3.10–3.13 后重试',
       '（有 ComfyUI 的话直接指它的 python 最省事，torch 不用再下 2.5 GB）',
     ].join('\n'));
   }
   const probe = await probePython(found.python);
-  let mode = env.SOUNDTRY_DEPS || cfg.deps || (probe?.hasTorch ? 'borrow' : 'standalone');
+  const wanted = env.SOUNDTRY_DEPS || cfg.deps || manifest.defaultMode || 'selfcontained';
+  let mode = wanted;
   if (mode === 'borrow' && !probe?.hasTorch) {
-    log('[deps] 指定的解释器没有 torch，退回 standalone');
-    mode = 'standalone';
+    log('[deps] 指定的解释器没有 torch，borrow 用不了，改用 selfcontained');
+    mode = 'selfcontained';
   }
   log(`[deps] 依赖源 ${found.python}（${found.why}）· 模式 ${mode}${probe ? ` · torch ${probe.torch || '无'}` : ''}`);
 
@@ -341,10 +349,20 @@ export async function ensureReady({ env = process.env, log = () => {}, signal, f
 
   const spec = manifest.modes[mode];
   const mirror = env.SOUNDTRY_PYPI || cfg.pypi || spec.mirror;
-  if (mode === 'standalone' && spec.torchIndex) {
-    await pipInstall(VENV_PY, spec.torchPackages ?? [], { indexUrl: spec.torchIndex, log });
+  // torch 只在**显式开启 demucs** 时才装。
+  // 历史：1.0.x 的 borrow/standalone 默认带 demucs，而 demucs 拉 torch+torchaudio
+  // （从 ComfyUI 借到的是 2.8.0+cu129），于是用户会看到"依赖 venv + torchaudio cu129"。
+  // 默认路径（MDX-Net ONNX 分离 + pyin 音高）根本不需要它们。
+  const wantDemucs = env.SOUNDTRY_WITH_DEMUCS === '1' || cfg.withDemucs === true;
+  if (wantDemucs && spec.demucsTorchIndex) {
+    log('[deps] 已显式开启 demucs：先装 torch/torchaudio（约 2.5 GB）');
+    await pipInstall(VENV_PY, spec.demucsTorchPackages ?? ['torch', 'torchaudio'],
+      { indexUrl: spec.demucsTorchIndex, log });
   }
   await pipInstall(VENV_PY, spec.pip ?? [], { mirror, log });
+  if (wantDemucs && spec.demucsPip?.length) {
+    await pipInstall(VENV_PY, spec.demucsPip, { mirror, log });
+  }
   // 有些包会被 ComfyUI 的 site-packages "视为已满足"而跳过（onnxruntime 就这样）。
   // 这些要强制装进插件 venv，否则删掉 ComfyUI 就没了。
   if (spec.forceInstall?.length) {

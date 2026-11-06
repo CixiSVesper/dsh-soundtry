@@ -220,6 +220,28 @@ export function rhythmSpec() {
           description: 'Optional: the video file whose cuts you want compared against the beat grid. '
             + 'Defaults to `input` when that is a video.',
         },
+        bpm: {
+          type: 'number',
+          description: 'Force this BPM instead of the estimated one (the report says 不确定 when candidates tie). '
+            + 'The bar grid then follows the BPM you pin.',
+        },
+        fps: { type: 'number', description: 'Frame rate for the exported timecode. Default 25.' },
+        gridLevel: {
+          type: 'string',
+          enum: ['bar', 'beat'],
+          description: 'Granularity of the marker export: "bar" = one per bar, "beat" = one per beat (~4x more). '
+            + 'Default bar.',
+        },
+        gridCsv: {
+          type: 'string',
+          description: 'Write the bar/beat marker table here (index,bar,beat,time_sec,timecode). '
+            + 'Import into Premiere or DaVinci as markers so cuts snap to a verified grid instead of by ear.',
+        },
+        barsCsv: {
+          type: 'string',
+          description: 'Write a per-bar energy table here (bar,start,end,rms,percussive,drums,relative energy). '
+            + 'Use it to plan shot lengths: loud bars take short cuts, quiet bars take long ones.',
+        },
       },
       required: ['input'],
       additionalProperties: false,
@@ -231,7 +253,8 @@ export function rhythmSpec() {
     async execute(args, exec) {
       if (!args?.input) throw new Error('input is required');
       const { report } = await runSoundtry('rhythm', {
-        args: toArgs({ input: args.input, video: args.video }),
+        args: toArgs({ input: args.input, video: args.video, bpm: args.bpm, fps: args.fps,
+          gridLevel: args.gridLevel, gridCsv: args.gridCsv, barsCsv: args.barsCsv }),
         signal: exec?.signal,
       });
       return { text: report };

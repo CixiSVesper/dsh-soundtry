@@ -9,18 +9,40 @@ import fs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const CONFIG_NAME = 'soundtry.json';
+export const CONFIG_NAME = 'cixisound.json';
 
 export function configPath(env = process.env) {
   return join(env.DSH_HOME?.trim() || join(homedir(), '.dsh'), CONFIG_NAME);
 }
 
+/**
+ * 读 JSON 前先剥 BOM，并在解析失败时**明确警告**。
+ *
+ * 为什么：用户手工编辑配置（记事本默认存 UTF-8 with BOM）时，JSON.parse 会抛
+ * `Unexpected token '\uFEFF'`；以前 catch 是空的，表现成"配置明明写了却不生效、
+ * 还退回默认模型"，排查很费时间（B 站反馈的原话）。
+ */
+function readJsonFile(path) {
+  const raw = fs.readFileSync(path, 'utf8');
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
+}
+
 export function readRaw(env = process.env) {
-  try {
-    return JSON.parse(fs.readFileSync(configPath(env), 'utf8'));
-  } catch {
-    return {};
+  const base = env.DSH_HOME?.trim() || join(homedir(), '.dsh');
+  for (const name of [CONFIG_NAME, 'soundtry.json', 'soundambi.json']) {
+    // 后两个是改名前的旧文件：只读回退，不迁移不删除（用户手写的 python/comfyui 还在里面）
+    const p = join(base, name);
+    if (!fs.existsSync(p)) continue;
+    try {
+      return readJsonFile(p);
+    } catch (e) {
+      // 不静默：这条路以前吞掉错误，等于让人白找半天
+      console.warn(`[dsh-cixisound] 配置文件解析失败，将忽略它：${p}（${e && e.message}）。`
+        + ' 如果是 BOM 问题，插件会自动剥掉；其余情况请检查 JSON 语法。');
+      continue;
+    }
   }
+  return {};
 }
 
 /** 只接受白名单里的种类，避免把任意键写进配置文件。 */

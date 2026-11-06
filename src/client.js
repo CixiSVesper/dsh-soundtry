@@ -1,6 +1,6 @@
 /**
- * client.js — 「插件 → 已安装 → dsh-soundtry」详情页里的 **声音分析** 区块。
- * 宿主侧只提供 /dsh-soundtry/api/*；本文件只负责渲染与读写。
+ * client.js — 「插件 → 已安装 → dsh-cixisound」详情页里的 **声音分析** 区块。
+ * 宿主侧只提供 /dsh-cixisound/api/*；本文件只负责渲染与读写。
  *
  * 契约（照 @deepseek-ai/dsh-client-modules 与 slot-contract 的实现）：
  *   - package.json 的 `exports["./client"]` 指向本文件
@@ -10,7 +10,7 @@
  *   - 契约要求：不是自己负责的 subject 必须返回 null，否则会挂到所有插件详情页
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-soundtry',
+  id: 'dsh-cixisound',
   factory: (require) => {
     const module = { exports: {} };
     const exports = module.exports;
@@ -19,8 +19,8 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const { createElement: h, useCallback, useEffect, useState } = React;
 
-    const API = '/dsh-soundtry/api';
-    const CSS_ID = 'dsh-soundtry/section.css';
+    const API = '/dsh-cixisound/api';
+    const CSS_ID = 'dsh-cixisound/section.css';
     const CSS = `
 .sdt{max-width:760px;display:flex;flex-direction:column;gap:6px;color:var(--dsw-alias-label-primary)}
 .sdt-title{margin:0;font-size:16px;font-weight:500;line-height:24px}
@@ -153,7 +153,7 @@ window.__ModuleLoader__.load({
     }
 
     const inject = ['slots'];
-    const OWN = 'dsh-soundtry';
+    const OWN = 'dsh-cixisound';
 
     /**
      * 插件详情页（插件 → 已安装 → 点进来）的 subject 形状：
@@ -175,7 +175,7 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
-      // 「插件 → 已安装 → dsh-soundtry」详情页里的区块。
+      // 「插件 → 已安装 → dsh-cixisound」详情页里的区块。
       // 不挂全局「设置」页：用户要的是"跟着插件走"，两处都放会重复。
       ctx.effect(
         () => ctx.slots.inject(

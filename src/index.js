@@ -1,7 +1,7 @@
 /**
- * index.js — DSH-SoundTry 插件入口。
+ * index.js — DSH-CixiSound 插件入口。
  *
- * 1.0.2：六个工具 + 设置 API（/dsh-soundtry/api/settings）。
+ * 1.0.2：六个工具 + 设置 API（/dsh-cixisound/api/settings）。
  * 客户端半边 src/client.js 在 DSH「设置」里渲染「声音分析」section，读写同一份配置。
  *
  * 分离默认走 MDX-Net ONNX（onnxruntime，无 torch）；依赖声明在 deps.manifest.json，
@@ -13,7 +13,7 @@ import {
   configPath, normalize, readRaw, resolveDevice, writeSettings,
 } from './settings.js';
 
-export const name = 'dsh-soundtry';
+export const name = 'dsh-cixisound';
 export const inject = ['tools', 'webServer'];
 
 function fail(error) {
@@ -64,7 +64,7 @@ export async function apply(ctx) {
   if (ctx.webServer?.register) {
     disposers.push(ctx.webServer.register({
       kind: 'exact',
-      path: '/dsh-soundtry/api/settings',
+      path: '/dsh-cixisound/api/settings',
       handler: async (req, res) => {
         try {
           if (req.method === 'GET') { sendJson(res, 200, await snapshot()); return; }

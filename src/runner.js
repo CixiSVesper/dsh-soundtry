@@ -72,6 +72,10 @@ export async function runSoundtry(subcommand, opts = {}) {
   }
   if (cfg.ffmpeg) childEnv.DSH_FFMPEG_PATH = childEnv.DSH_FFMPEG_PATH || cfg.ffmpeg;
   childEnv.SOUNDTRY_DEVICE = dev.effective === 'gpu' ? 'cuda' : 'cpu';
+  // CPU 上 float16 慢一个数量级（实测 252s 歌：224s vs 13s），所以按设备给默认 compute
+  if (!childEnv.SOUNDTRY_COMPUTE && !cfg.compute) {
+    childEnv.SOUNDTRY_COMPUTE = dev.effective === 'gpu' ? 'float16' : 'int8';
+  }
   if (cfg.compute) childEnv.SOUNDTRY_COMPUTE = childEnv.SOUNDTRY_COMPUTE || cfg.compute;
   if (cfg.prompt) childEnv.SOUNDTRY_PROMPT = childEnv.SOUNDTRY_PROMPT || cfg.prompt;
   childEnv.SOUNDTRY_MODEL = childEnv.SOUNDTRY_MODEL || ready.model;
