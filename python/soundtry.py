@@ -262,6 +262,68 @@ def _demucs_available():
         return False
 
 
+def _align_vocal_level(voc, mix, gate=0.10, headroom=0.9):
+    """把人声轨抬到与混音相当的电平 —— 但加三道保险，别再出现"纯器乐被抬爆"。
+
+    背景（用户反馈，已复现）：
+      原先只有 `if r_voc > 1e-9: voc *= (r_mix/r_voc)*0.9`。
+      纯器乐输入时 MDX 仍会吐一点点"残留人声"（r_voc/r_mix 实测 0.0105，约 -65 dB），
+      于是被放大 85 倍，peak 0.0154 一下顶到 1.31，四个采样点削到 1.0。
+      带唱的也会顶：实测 r_voc/r_mix 0.628 那首 peak 1.025，削 2.5%。
+
+    三道保险：
+      1) 门槛：r_voc/r_mix < gate(0.10) 判成"这轨不像人声"，**不放大**，按原尺度留着。
+         两类实测几何中点约 0.08，取 0.10 偏保守 —— 漏判只是少抬电平，误判整轨报废。
+      2) 封顶：算出 gain 后若 peak*gain > 1.0，把 gain 压到 1.0/peak。
+      3) 不静默：门槛命中、封顶、残余削顶都打一行 warning。
+
+    注意：本函数**只缩放 voc**，不缩放 other —— 见 `_separate_onnx` 里的说明，
+    因此缩放后 voc + other 不再等于原混音（这是有意的取舍，写进 README）。
+    """
+    import numpy as np
+
+    def _rms(x):
+        return float(np.sqrt(np.mean(np.asarray(x, dtype="float64") ** 2)))
+
+    r_mix, r_voc = _rms(mix), _rms(voc)
+    info = {"gain": 1.0, "ratio": None, "peak_in": None, "peak_out": None,
+            "skipped": None, "capped": False}
+    if r_mix <= 1e-9 or r_voc <= 1e-9:
+        info["skipped"] = "empty"
+        return voc, info
+
+    ratio = r_voc / r_mix
+    peak = float(np.abs(voc).max())
+    info.update(ratio=round(ratio, 5), peak_in=round(peak, 4))
+
+    if ratio < gate:
+        # 判成纯器乐 / 纯音乐：MDX 那轨只是残留，放大它只会得到削顶噪声
+        info["skipped"] = "not-vocal"
+        info["peak_out"] = round(peak, 4)
+        print(f"# ⚠ 人声轨能量只有混音的 {ratio*100:.2f}%（{20*np.log10(max(ratio,1e-9)):.1f} dB），"
+              f"判为纯器乐 → 不做电平对齐（否则会放大 {headroom/max(ratio,1e-9):.0f} 倍）",
+              flush=True)
+        return voc, info
+
+    gain = headroom / ratio
+    if peak * gain > 1.0:
+        gain = 1.0 / max(peak, 1e-9)
+        info["capped"] = True
+        print(f"# ⚠ 人声轨按比例抬升会削顶（peak {peak:.3f} × {headroom/max(ratio,1e-9):.2f}），"
+              f"已把增益压到 {gain:.2f}× 保住波形", flush=True)
+    else:
+        info["gain"] = round(gain, 4)
+
+    out = np.asarray(voc, dtype="float32") * gain
+    info["gain"] = round(gain, 4)
+    info["peak_out"] = round(float(np.abs(out).max()), 4)
+    clipped = int((np.abs(out) > 1.0).sum())
+    if clipped:
+        print(f"# ⚠ 电平对齐后仍有 {clipped} 个采样点越过 1.0（已尽力，源头就超了）", flush=True)
+        info["clipped_samples"] = clipped
+    return out, info
+
+
 def _separate_onnx(path, outdir, n_fft=7680, hop=1024, sr=44100, dim_t=256):
     """MDX-Net（UVR）分离，纯 onnxruntime —— 不用 torch。
 
@@ -326,12 +388,20 @@ def _separate_onnx(path, outdir, n_fft=7680, hop=1024, sr=44100, dim_t=256):
     def rms(x):
         return float(np.sqrt(np.mean(np.asarray(x, dtype="float64") ** 2)))
 
-    r_mix, r_voc = rms(y), rms(voc)
-    if r_voc > 1e-9 and r_mix > 1e-9:
-        voc *= (r_mix / r_voc) * 0.9     # 电平对齐（模型自带的 compensate 未知）
+    voc, gain_info = _align_vocal_level(voc, y)
 
     outdir.mkdir(parents=True, exist_ok=True)
     got = {}
+    # inst = y - voc 是"相减"出来的，峰值可能超过 1.0（y 和 voc 都接近满幅时相减能到 2）。
+    # 写文件前按同样原则保护一下：只缩不放，且不静默。chroma 对整体缩放不敏感。
+    peak_inst = float(np.abs(inst).max()) if len(inst) else 0.0
+    if peak_inst > 1.0:
+        g = 0.999 / peak_inst
+        inst = np.asarray(inst, dtype="float32") * g
+        gain_info["inst_peak_in"] = round(peak_inst, 4)
+        gain_info["inst_gain"] = round(g, 4)
+        print(f"# ⚠ 伴奏轨（y - voc）峰值 {peak_inst:.3f} 越界，已缩到 {g:.3f}× 避免写文件时削顶",
+              flush=True)
     import soundfile as sf
     for name, arr in (("vocals", voc), ("other", inst)):
         mono = arr.mean(axis=0)
@@ -348,7 +418,13 @@ def _separate_onnx(path, outdir, n_fft=7680, hop=1024, sr=44100, dim_t=256):
     bass = np.zeros_like(got["other"])
     sf.write(str(outdir / "bass.flac"), bass, 16000, format="FLAC")
     got["bass"] = bass
-    (outdir / "backend.txt").write_text("mdx-onnx\n", encoding="utf-8")
+    (outdir / "backend.txt").write_text(
+        "mdx-onnx\n" if not gain_info.get("skipped") else f"mdx-onnx (no-level-align: {gain_info['skipped']})\n",
+        encoding="utf-8")
+    # 电平对齐的细节单独落一份，排查时不用重跑：增益、比例、是否封顶、有没有削顶
+    import json as _json
+    (outdir / "gain.json").write_text(
+        _json.dumps(gain_info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return got
 
 
